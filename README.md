@@ -1,10 +1,28 @@
 # AeroAM
 
-A responsive aviation dashboard that runs as a static web app; no build step is required.
+A responsive aviation dashboard served by Express.
 
-## Run
+## Run locally
 
-Open `index.html` in a modern browser, or serve this directory from a local HTTP server. Browser geolocation requires HTTPS or localhost. The map, fonts, and live data need an internet connection. AeroAM starts in its full-screen Standby Mode and uses the folder menu to navigate.
+Requires Node.js 20 or newer.
+
+```sh
+npm install
+npm start
+```
+
+Open `http://localhost:3000`. The server uses the `PORT` environment variable when provided and binds to `0.0.0.0`, as required by Render Web Services. `/health` returns `200 OK` for health checks. Browser geolocation requires HTTPS or localhost. The map, fonts, and live data need an internet connection. AeroAM starts in its full-screen Standby Mode and uses the folder menu to navigate.
+
+## Deploy to Render
+
+Create a **Web Service** for this repository and configure:
+
+- **Runtime:** Node
+- **Build command:** `npm install && npm run build`
+- **Start command:** `npm start`
+- **Health check path:** `/health`
+
+Render provides the listening port through `PORT`; no fixed port environment variable is needed.
 
 ## Available integrations
 
