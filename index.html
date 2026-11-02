@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10141b">
+  <title>AeroAM — Aviation, in view</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://tiles.openfreemap.org">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <main class="main-content">
+      <header class="topbar">
+        <a class="aero-logo" href="#" aria-label="AeroAM Live Map"><svg class="logo-plane" viewBox="0 0 42 42" aria-hidden="true"><path d="M20.2 4.7c.5-1.6 1.1-1.6 1.6 0l3.6 12.1 11.1 7c1.7 1.1 1.5 2.4-.5 2.3l-10.1-.7-3.1 9.4c-.5 1.5-1.4 1.5-1.9 0l-3.1-9.4-10.1.7c-2 .1-2.2-1.2-.5-2.3l11.1-7z"/></svg><span class="logo-initials">AM</span><span class="logo-word">AeroAM</span></a>
+        <div class="page-heading"><span class="eyebrow" id="page-eyebrow">THE WORLD ABOVE YOU</span><h1 id="page-title">Live map</h1></div>
+        <div class="topbar-actions">
+          <div class="local-time"><span class="live-pulse"></span><span id="header-clock">--:--:--</span><span class="utc-label">LOCAL</span></div>
+          <div class="workspace-menu-wrap"><button class="workspace-button" id="workspace-button" aria-label="Open AeroAM menu" aria-expanded="false" title="AeroAM menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5h-16a1.5 1.5 0 0 1-1.5-1.5v-9a1.5 1.5 0 0 1 1.5-1.5Z"/></svg></button><nav class="workspace-menu hidden" id="workspace-menu" aria-label="AeroAM menu"><button data-page="map-page"><span>⌖</span>Live Map</button><button data-page="traffic-page"><span>▤</span>Traffic Board</button><button data-page="flight-page"><span>✈</span>AeroAM Flight</button><button id="menu-settings"><span>⚙</span>Settings</button></nav></div>
+        </div>
+      </header>
+
+      <section class="page-view active" id="map-page">
+        <div class="map-toolbar">
+          <div class="search-wrap"><span class="search-icon">⌕</span><input id="location-search" type="search" placeholder="Search city, airport or coordinates" autocomplete="off"><button id="search-submit" aria-label="Search location">↵</button><div class="search-results hidden" id="search-results"></div></div>
+          <button class="toolbar-button" id="locate-button"><span>◎</span> My location</button>
+          <button class="toolbar-button" id="standby-button"><span>◷</span> Standby</button>
+        </div>
+        <section class="map-card">
+          <div id="map" role="application" aria-label="Interactive aircraft map"></div>
+          <div class="map-top-left">
+            <div class="map-live"><span class="live-pulse"></span> LIVE TRAFFIC</div>
+            <div class="map-location"><span class="location-pin">⌖</span><span id="map-location-label">Dublin, Ireland</span><span class="location-coordinates" id="map-coordinates">53.35° N, 6.26° W</span></div>
+          </div>
+          <div class="map-actions">
+            <button id="airway-button" class="map-action" aria-pressed="false" title="Toggle airways">⇢</button>
+            <button id="labels-button" class="map-action" aria-pressed="true" title="Toggle aircraft labels">Aa</button>
+            <button id="airports-button" class="map-action" aria-pressed="true" title="Toggle airport labels">⌖</button>
+            <span class="map-action-divider"></span>
+            <button id="zoom-in" class="map-action" aria-label="Zoom in">+</button>
+            <button id="zoom-out" class="map-action" aria-label="Zoom out">−</button>
+          </div>
+          <div class="map-legend"><span><i class="legend-plane"></i> Aircraft</span><span><i class="legend-selected"></i> Selected</span><span id="aircraft-count">Loading traffic…</span></div>
+          <div class="map-error hidden" id="map-message" role="status"></div>
+          <div class="standby-overlay hidden" id="standby-overlay"><div class="standby-center"><div class="standby-time" id="standby-clock">--:--</div><div class="standby-date" id="standby-date"></div><div class="standby-weather" id="standby-weather"><span id="standby-weather-icon">☁</span><span id="standby-weather-temp">--°</span></div><button id="standby-exit">Exit standby · Esc</button></div></div>
+        </section>
+        <div class="dashboard-bottom">
+          <section class="info-card weather-card"><div class="card-title-row"><div><div class="eyebrow">RIGHT NOW</div><h2>Local weather</h2></div><button class="subtle-button" id="weather-toggle" aria-label="Toggle weather">◉</button></div><div class="weather-main"><span class="weather-icon" id="weather-icon">—</span><div><strong id="weather-temp">--°</strong><span id="weather-summary">Loading conditions</span></div></div><div class="weather-stats"><div><span>WIND</span><strong id="weather-wind">—</strong></div><div><span>VISIBILITY</span><strong id="weather-visibility">—</strong></div><div><span>FEELS LIKE</span><strong id="weather-feels">—</strong></div></div><div class="sun-times"><span>☀ <span id="sunrise">Sunrise —</span></span><span>◐ <span id="sunset">Sunset —</span></span></div></section>
+          <section class="info-card traffic-card"><div class="card-title-row"><div><div class="eyebrow">IN YOUR AIRSPACE</div><h2>Nearby traffic</h2></div><button class="text-button" data-go="traffic-page">View all <span>↗</span></button></div><div class="nearby-list" id="nearby-list"><div class="empty-row">Connecting to live aircraft data…</div></div></section>
+          <section class="info-card clock-card"><div class="eyebrow">LOCAL TIME</div><div class="mini-clock" id="mini-clock">--:--</div><div class="clock-caption" id="clock-date">Loading date</div><div class="clock-divider"></div><div class="sun-caption"><span class="sun-dot">☼</span><span>Golden hour, wherever you are</span></div><button class="text-button clock-settings" id="clock-settings">Clock preferences <span>↗</span></button></section>
+        </div>
+      </section>
+
+      <section class="page-view" id="traffic-page">
+        <div class="board-intro"><div><p class="eyebrow">LIVE · WITHIN MAP VIEW</p><h2>Traffic board</h2><p class="intro-copy">A clear view of the aircraft around <span id="board-location">Dublin, Ireland</span>.</p></div><button class="toolbar-button" id="board-refresh">↻ <span>Refresh</span></button></div>
+        <div class="board-summary"><div class="summary-item"><span class="summary-icon">✈</span><div><strong id="board-count">—</strong><span>Aircraft in view</span></div></div><div class="summary-item"><span class="summary-icon">◎</span><div><strong id="board-location-short">Dublin</strong><span>Selected location</span></div></div><div class="summary-item"><span class="summary-icon">◷</span><div><strong id="board-temperature">—</strong><span>Local temperature</span></div></div><div class="board-search"><span>⌕</span><input id="aircraft-search" type="search" placeholder="Search callsign, ICAO24, country…"></div></div>
+        <div class="table-wrap"><table class="aircraft-table"><thead><tr><th><button data-sort="callsign">CALLSIGN <span>↕</span></button></th><th><button data-sort="registration">REGISTRATION <span>↕</span></th><th><button data-sort="type">AIRCRAFT <span>↕</span></button></th><th><button data-sort="airline">OPERATOR <span>↕</span></button></th><th><button data-sort="altitude">ALTITUDE <span>↕</span></button></th><th><button data-sort="speed">GROUND SPEED <span>↕</span></button></th><th><button data-sort="heading">HEADING <span>↕</span></button></th><th>ORIGIN / DESTINATION</th></tr></thead><tbody id="aircraft-table-body"><tr><td colspan="8" class="empty-row">Waiting for live aircraft data…</td></tr></tbody></table></div>
+        <div class="board-footnote">Positions from OpenSky Network · refreshed every 30 seconds · aircraft shown within current map bounds</div>
+      </section>
+
+      <section class="page-view" id="flight-page">
+        <div class="flight-hero"><div class="eyebrow">AEROAM FLIGHT · INDEPENDENT MODULE</div><h2>The world is your runway.</h2><p>A separate home for flight simulation. Dashboard traffic and weather remain unaffected.</p><div class="flight-status"><span class="status-dot"></span> Simulator module is not connected</div><div class="aircraft-choice"><button class="aircraft-option selected"><span>✈</span><strong>Boeing 737 MAX</strong><small>Ryanair livery</small></button><button class="aircraft-option"><span>✈</span><strong>Boeing 777</strong><small>Etihad livery</small></button><button class="aircraft-option"><span>✈</span><strong>Airbus A320</strong><small>Classic narrow-body</small></button><button class="aircraft-option"><span>✈</span><strong>Boeing 747</strong><small>The Queen of the Skies</small></button></div><button class="primary-button" id="flight-launch" disabled>Flight simulator unavailable</button><p class="module-note">A global 3D simulator needs a dedicated terrain/flight engine and aircraft assets. This module is isolated from the live dashboard and awaits that integration.</p></div>
+      </section>
+    </main>
+  </div>
+
+  <aside class="detail-panel" id="detail-panel" aria-label="Aircraft details" aria-hidden="true"><div class="panel-top"><div><div class="eyebrow" id="detail-kicker">AIRCRAFT DETAIL</div><h2 id="detail-title">Aircraft</h2></div><button class="icon-button panel-close" id="detail-close" aria-label="Close details">×</button></div><div id="detail-content"></div></aside>
+  <div class="panel-scrim hidden" id="panel-scrim"></div>
+
+  <section class="settings-drawer" id="settings-drawer" aria-label="Dashboard settings" aria-hidden="true"><div class="panel-top"><div><div class="eyebrow">MAKE IT YOURS</div><h2>Settings</h2></div><button class="icon-button" id="settings-close" aria-label="Close settings">×</button></div>
+    <div class="settings-section"><div class="settings-heading">DISPLAY</div><label class="setting-row"><span><strong>Standby mode</strong><small>Show the full-screen clock overlay</small></span><input type="checkbox" id="setting-standby"></label><label class="setting-row"><span><strong>Weather</strong><small>Show local conditions</small></span><input type="checkbox" id="setting-weather" checked></label><label class="setting-row"><span><strong>Sunrise & sunset</strong><small>Show local daylight times</small></span><input type="checkbox" id="setting-sun" checked></label><label class="setting-row"><span><strong>Airway overlays</strong><small>Show navigation routes</small></span><input type="checkbox" id="setting-airways"></label><label class="setting-row"><span><strong>Aircraft labels</strong><small>Show callsigns on the map</small></span><input type="checkbox" id="setting-labels" checked></label><label class="setting-row"><span><strong>Airport labels</strong><small>Show nearby airport markers</small></span><input type="checkbox" id="setting-airports" checked></label></div>
+    <div class="settings-section"><div class="settings-heading">PREFERENCES</div><label class="select-row"><span><strong>Theme</strong></span><select id="setting-theme"><option value="dark">Dark</option><option value="light">Light</option></select></label><label class="select-row"><span><strong>Clock format</strong></span><select id="setting-clock-format"><option value="24">24-hour</option><option value="12">12-hour</option></select></label><label class="select-row"><span><strong>Clock style</strong></span><select id="setting-clock-style"><option value="modern">Modern</option><option value="mono">Monospaced</option><option value="serif">Editorial</option></select></label><label class="setting-row"><span><strong>Detailed aircraft view</strong><small>Show every available flight field</small></span><input type="checkbox" id="setting-detailed" checked></label></div>
+    <div class="settings-section"><div class="settings-heading">DEFAULT LOCATION</div><label class="default-location"><span>Location name or coordinates</span><div><input id="setting-location" value="Dublin, Ireland"><button id="save-location" class="primary-button">Set</button></div></label></div>
+    <div class="settings-foot">Preferences are saved on this device.</div>
+  </section>
+  <div class="settings-scrim hidden" id="settings-scrim"></div>
+</body>
+</html>
