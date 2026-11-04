@@ -75,6 +75,19 @@
     clearTimeout(showMessage.timer);
     showMessage.timer = setTimeout(() => node.classList.add("hidden"), 7000);
   };
+  let aircraftMessage = "";
+  const showAircraftMessage = (message) => {
+    aircraftMessage = message;
+    showMessage(message);
+  };
+  const clearAircraftMessage = () => {
+    const node = $("map-message");
+    if (aircraftMessage && node.textContent === aircraftMessage) {
+      node.classList.add("hidden");
+      clearTimeout(showMessage.timer);
+    }
+    aircraftMessage = "";
+  };
   const setLocationLabel = () => {
     const { name, lat, lon } = settings.location;
     $("map-location-label").textContent = name;
@@ -153,6 +166,7 @@
         if (!Array.isArray(data.states)) throw new Error("Aircraft service returned an invalid state vector payload.");
         return data;
       }));
+      clearAircraftMessage();
       const states = responses.flatMap((data) => data.states);
       aircraft = [...new Map(states.filter((row) => row[0] && Number.isFinite(row[5]) && Number.isFinite(row[6])).map((row) => [row[0], row])).values()].map((row) => ({
         icao: String(row[0]).trim().toUpperCase(), callsign: String(row[1] || "").trim() || "Unknown",
@@ -178,27 +192,28 @@
         $("aircraft-count").textContent = aircraft.length
           ? `${aircraft.length.toLocaleString()} aircraft · rate limited`
           : "Aircraft feed rate limited";
-        showMessage(`OpenSky rate limit reached. Retrying in about ${Math.ceil(delay / 60)} minute(s).`);
+        showAircraftMessage(`OpenSky rate limit reached. Retrying in about ${Math.ceil(delay / 60)} minute(s).`);
         return;
       }
       if (error.code === "authentication_failed") {
         $("aircraft-count").textContent = "Aircraft authentication failed";
-        showMessage("OpenSky authentication failed. Check OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET in Render.");
+        showAircraftMessage("OpenSky authentication failed. Check OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET in Render.");
         return;
       }
+      deferAircraftRefresh(error.retryAfterSeconds || 15);
       $("aircraft-count").textContent = aircraft.length
         ? `${aircraft.length.toLocaleString()} aircraft · update unavailable`
         : "Live feed unavailable";
       if (!aircraft.length) {
         $("nearby-list").replaceChildren(el("div", "empty-row", "Live aircraft data is temporarily unavailable."));
         $("aircraft-table-body").replaceChildren(emptyTable("Live aircraft data is temporarily unavailable."));
-        showMessage(`${error.message || "Aircraft service is unreachable."} The map is available; traffic will retry.`);
+        showAircraftMessage("OpenSky live traffic could not be reached. The map is still available; traffic will retry shortly.");
       }
     }
   }
 
   function deferAircraftRefresh(seconds) {
-    const delay = Math.max(30, Math.min(Number(seconds) || 60, 86_400));
+    const delay = Math.max(5, Math.min(Number(seconds) || 60, 86_400));
     nextAircraftRefreshAt = Date.now() + delay * 1000;
     clearTimeout(retryTimer);
     retryTimer = setTimeout(() => {

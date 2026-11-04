@@ -206,6 +206,7 @@ app.get(["/", "/index.html"], (_request, response, next) => {
   });
 });
 app.get("/app.js", (_request, response, next) => {
+  response.setHeader("Cache-Control", "no-store");
   response.sendFile("app.js", { root: publicDirectory }, (error) => {
     if (error) next(error);
   });
