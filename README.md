@@ -27,7 +27,7 @@ Render provides the listening port through `PORT`; no fixed port environment var
 ## Available integrations
 
 - **Map:** MapLibre GL JS vector map styles from OpenFreeMap, with OpenStreetMap attribution and airport labels from OpenStreetMap data. OpenStreetMap's public raster tile server is not used.
-- **Aircraft:** OpenSky Network state vectors for the current map bounds, refreshed every 30 seconds. Anonymous access is subject to OpenSky's current availability and rate limits. A production deployment should proxy and cache this feed through its own service.
+- **Aircraft:** OpenSky Network state vectors for the current map bounds, fetched through the same-origin Express endpoint at `/api/aircraft` and refreshed every 60 seconds. The server coalesces identical requests, caches recent results, returns short-lived stale results when OpenSky is temporarily unavailable, refreshes OAuth2 tokens, and reports upstream rate limits for client-side backoff. The browser does not call OpenSky directly, avoiding the provider's browser CORS restrictions.
 - **Aircraft detail enrichment:** Per-selected-aircraft ADS-B detail via ADS-B.lol, with HexDB fallback when available. Coverage and rate limits vary; not every aircraft has a registry record. The detail panel includes transponder-provided fields and marks absent route/airline values as unavailable.
 - **Weather and daylight:** Open-Meteo current conditions, sunrise, and sunset; airport METAR from AviationWeather.gov for airports with a known ICAO code.
 - **Locations:** Browser geolocation, coordinate entry, and Nominatim place search.
@@ -40,4 +40,13 @@ LiveATC feeds, complete airport arrival/departure schedules, airway overlays, an
 
 AeroAM Flight remains an independent, clearly marked placeholder. A full worldwide terrain simulator needs a dedicated flight-simulation engine, terrain/airport datasets, and aircraft assets; those are not bundled or simulated by the dashboard.
 
-The public services used here are suitable for development and demonstration, not guaranteed production SLAs. Follow each provider's terms and add a backend proxy/cache and an appropriately licensed data plan before production use.
+Public data services are subject to their own terms, quotas, and availability; the OpenSky proxy/cache in this repository is a basic single-instance cache, not a distributed cache or production SLA.
+
+### OpenSky credentials on Render
+
+Create an API client in your OpenSky account, then add these secrets in the Render Web Service **Environment** settings:
+
+- `OPENSKY_CLIENT_ID`
+- `OPENSKY_CLIENT_SECRET`
+
+The Render Blueprint declares both as unsynced secrets. The server exchanges them using OpenSky's OAuth2 client-credentials flow, refreshes expired/near-expiry tokens, and retries a single unauthorized request. If credentials are omitted, the server uses OpenSky's anonymous allowance, which is much more limited and can return `429` after credits are exhausted. The browser now shows rate-limit status and waits for the provider's retry interval instead of repeatedly polling.
