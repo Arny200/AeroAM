@@ -288,7 +288,7 @@ app.get("/api/geocode", async (request, response) => {
 app.get("/api/radio", async (_request, response) => {
   if (Date.now() < radioCache.expiresAt) {
     response.setHeader("X-AeroAM-Cache", "HIT");
-    return response.json({ stations: radioCache.stations });
+    return response.json({ stations: withCork96fm(radioCache.stations) });
   }
   try {
     const upstream = await fetch("https://de1.api.radio-browser.info/json/stations/bycountrycodeexact/IE?limit=60&order=votes&reverse=true&hidebroken=true", {
@@ -300,12 +300,24 @@ app.get("/api/radio", async (_request, response) => {
     radioCache.stations = data.filter((station) => typeof station.name === "string" && /^https:\/\//i.test(station.url_resolved || ""))
       .map((station) => ({ name: station.name, url: station.url_resolved, homepage: station.homepage || "" }));
     radioCache.expiresAt = Date.now() + 3_600_000;
-    return response.json({ stations: radioCache.stations });
+    return response.json({ stations: withCork96fm(radioCache.stations) });
   } catch (error) {
     console.error("Radio station lookup failed:", error.message);
-    return apiError(response, 502, "radio_unavailable", "Radio stations are temporarily unavailable.");
+    radioCache.stations = withCork96fm([]);
+    radioCache.expiresAt = Date.now() + 300_000;
+    return response.json({ stations: radioCache.stations, warning: "The station directory is unavailable; Cork's 96FM official player is still available." });
   }
 });
+
+function withCork96fm(stations) {
+  if (stations.some((station) => /cork'?s?\s*96fm/i.test(station.name))) return stations;
+  return [...stations, {
+    name: "Cork's 96FM · official player",
+    url: "",
+    externalUrl: "https://onicplayer.ie/play/96fm",
+    homepage: "https://www.96fm.ie/"
+  }];
+}
 
 function decodeFeedText(value) {
   return value
@@ -328,22 +340,28 @@ app.get("/api/incidents", async (_request, response) => {
     });
     if (!upstream.ok) throw new Error(`Aviation Herald returned HTTP ${upstream.status}`);
     const html = await upstream.text();
-    const incidents = [...html.matchAll(/<a\b([^>]*href=["'](\/h\?article=[^"']+)["'][^>]*)>([\s\S]*?)<\/a>/gi)].map(([, attributes, path, markup]) => {
+    const incidents = [...html.matchAll(/<a\b[^>]*href=["'](\/h\?article=[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].map(([, path, markup]) => {
       const title = decodeFeedText(markup);
       if (!title || /lawsuit|privacy|contact|about/i.test(title)) return null;
       const details = title.match(/^(.+?)\s+((?:A|B|C|E|CRJ|ATR|DH|DHC|BAE|F)\w+)\s+(?:at|near|enroute|on)\s+([^,]+),\s*(.*)$/i);
-      const image = markup.match(/<img\b[^>]*src=["']([^"']+)["']/i)?.[1] ||
-        html.slice(Math.max(0, html.indexOf(path) - 500), html.indexOf(path) + markup.length + 500).match(/<img\b[^>]*src=["']([^"']+)["']/i)?.[1] || "";
-      const imageUrl = image.startsWith("/") ? `https://avherald.com${image}` : image;
+      const date = title.match(/\b(?:on\s+)?([A-Z][a-z]{2,8}\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b/)?.[1] || "";
+      const parsedDate = date ? new Date(date.replace(/(\d)(st|nd|rd|th)\b/i, "$1")) : null;
+      if (parsedDate && !/\b\d{4}\b/.test(date)) parsedDate.setFullYear(new Date().getFullYear());
+      if (parsedDate && parsedDate > new Date()) parsedDate.setFullYear(parsedDate.getFullYear() - 1);
+      const normalizedTitle = title.toLowerCase();
+      const severity = /fatal|killed|fatality|death/i.test(normalizedTitle) ? "Critical"
+        : /injur|evacuat|fire|collision|runway excursion|overrun|emergency landing/i.test(normalizedTitle) ? "High"
+          : /incident|emergency|divert|return|damage|bird strike/i.test(normalizedTitle) ? "Moderate" : "Report";
       return {
         title,
         link: `https://avherald.com${path}`,
-        date: title.match(/\b(?:on\s+)?([A-Z][a-z]+\s+\d{1,2}(?:st|nd|rd|th)?\s+\d{4})\b/)?.[1] || "",
+        date,
+        occurrenceTime: parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : 0,
+        severity,
         operator: details?.[1] || "",
         aircraftType: details?.[2] || "",
         location: details?.[3] || "",
-        summary: details?.[4] || title,
-        image: /^https:\/\/[^/]+\//i.test(imageUrl) ? imageUrl : ""
+        summary: details?.[4] || title
       };
     }).filter((incident) => incident?.title && incident.link).slice(0, 20);
     if (!incidents.length) throw new Error("Aviation Herald page contained no incident entries");

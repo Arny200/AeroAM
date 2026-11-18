@@ -1,7 +1,7 @@
 (() => {
   const defaultLocation = { name: "Dublin, Ireland", lat: 53.3498, lon: -6.2603 };
   const storageKey = "aeroam-settings-v1";
-  const defaults = { theme: "dark", accent: "#8da8ff", clockFormat: "24", clockStyle: "modern", weather: true, sun: true, labels: true, airports: true, iss: false, detailed: true, standby: true, location: defaultLocation };
+  const defaults = { theme: "amoled", accent: "#8da8ff", autoAccent: true, clockFormat: "24", clockStyle: "modern", weather: true, sun: true, labels: true, airports: true, radio: true, nowPlaying: true, iss: false, detailed: true, standby: true, quizPlayerCount: 1, quizSameQuestion: true, quizTimer: false, quizNames: [], location: defaultLocation };
   const loadSettings = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
@@ -13,6 +13,9 @@
   };
   let settings = loadSettings();
   settings.standby = true;
+  if (!Array.isArray(settings.quizNames)) settings.quizNames = [];
+  if (settings.clockStyle === "cockpit") settings.clockStyle = "accent";
+  if (!["modern", "mono", "serif", "digital", "accent", "soft"].includes(settings.clockStyle)) settings.clockStyle = "modern";
   let map;
   const airportMarkers = [];
   let aircraft = [];
@@ -29,16 +32,32 @@
   let issMarker;
   let issTimer;
   let radioStations = [];
-  let airportQuizScore = 0;
-  let currentQuizAirport;
+  const quizPlayers = [];
+  let quizRoundAirports = [];
+  let quizPlayerIndex = 0;
+  let quizTimer;
+  let quizSeconds = 20;
   let currentQuizMode = "icao";
   let weatherData = null;
+  let incidentReports = [];
+  let incidentSort = "time";
+  let nowPlayingTitle = "";
+  let nowPlayingKind = "";
+  let nowPlayingAlternate = false;
+  let nowPlayingRotationTimer;
+  const playingMedia = new Map();
+  let spotifyIframeApi;
+  let spotifyUri = "";
+  let spotifyController;
+  let issClickTimer;
+  let centerIssWhenLoaded = false;
   let sortKey = "callsign";
   let sortAscending = true;
   let searchTimer;
   const markers = new Map();
   const markerAnimations = new Map();
   const aircraftDetailsCache = new Map();
+  const aircraftDetailsAttempted = new Set();
   const airlineNames = {
     ACA: "Air Canada", AFR: "Air France", AAL: "American Airlines", BAW: "British Airways",
     DAL: "Delta Air Lines", DLH: "Lufthansa", EIN: "Aer Lingus", ETD: "Etihad Airways",
@@ -58,22 +77,39 @@
   ];
   const columnDefinitions = [
     { key: "callsign", label: "Callsign", sortable: true },
+    { key: "icao", label: "ICAO24", sortable: true },
     { key: "registration", label: "Registration" },
     { key: "type", label: "Aircraft type" },
+    { key: "model", label: "Aircraft model" },
     { key: "airlineLogo", label: "Airline logo" },
     { key: "airline", label: "Airline / operator" },
-    { key: "altitude", label: "Altitude", sortable: true },
-    { key: "speed", label: "Ground speed", sortable: true },
-    { key: "heading", label: "Heading", sortable: true },
+    { key: "originCountry", label: "Origin country" },
     { key: "origin", label: "Origin" },
-    { key: "destination", label: "Destination" }
+    { key: "destination", label: "Destination" },
+    { key: "altitude", label: "Altitude", sortable: true },
+    { key: "geometricAltitude", label: "Geometric altitude", sortable: true },
+    { key: "airspeed", label: "Airspeed", sortable: true },
+    { key: "speed", label: "Ground speed", sortable: true },
+    { key: "verticalSpeed", label: "Vertical speed", sortable: true },
+    { key: "heading", label: "Heading", sortable: true },
+    { key: "squawk", label: "Squawk", sortable: true },
+    { key: "category", label: "Category" },
+    { key: "categoryId", label: "ADS-B category ID" },
+    { key: "status", label: "Flight status" },
+    { key: "position", label: "Position" },
+    { key: "positionUpdated", label: "Position updated" },
+    { key: "lastContact", label: "Last contact" },
+    { key: "sensors", label: "Sensors" },
+    { key: "spi", label: "Special purpose" },
+    { key: "positionSource", label: "Position source" },
+    { key: "carbon", label: "CO₂ / hour" }
   ];
   const columnOrder = Array.isArray(settings.columnOrder)
     ? [...settings.columnOrder.filter((key) => columnDefinitions.some((column) => column.key === key)), ...columnDefinitions.map((column) => column.key).filter((key) => !settings.columnOrder.includes(key))]
     : columnDefinitions.map((column) => column.key);
   const visibleColumns = new Set(Array.isArray(settings.columns)
     ? settings.columns.filter((key) => columnDefinitions.some((column) => column.key === key))
-    : ["callsign", "registration", "type", "airline", "altitude", "speed", "heading", "origin", "destination"]);
+    : columnDefinitions.filter((column) => column.key !== "airlineLogo").map((column) => column.key));
   let orderedVisibleColumns = columnOrder.filter((key) => visibleColumns.has(key));
   const $ = (id) => document.getElementById(id);
   const el = (tag, className, text) => {
@@ -128,7 +164,7 @@
     }
     map = new maplibregl.Map({
       container: "map",
-      style: settings.theme === "dark" ? "https://tiles.openfreemap.org/styles/dark" : "https://tiles.openfreemap.org/styles/bright",
+      style: settings.theme === "light" ? "https://tiles.openfreemap.org/styles/bright" : "https://tiles.openfreemap.org/styles/dark",
       center: [settings.location.lon, settings.location.lat], zoom: 7, pitch: 0,
       attributionControl: true, canvasContextAttributes: { antialias: true }
     });
@@ -147,7 +183,7 @@
     });
     map.on("moveend", scheduleAircraftRefresh);
     map.on("moveend", updateAirports);
-    map.on("zoomend", renderAirportMarkers);
+    map.on("zoomend", () => { renderAirportMarkers(); renderAircraft(); });
     map.on("load", () => { refreshAircraft(); updateAirports(); if (settings.iss) setISSTracking(true); });
     refreshTimer = setInterval(refreshAircraft, 60000);
   }
@@ -194,13 +230,14 @@
       clearAircraftMessage();
       const states = responses.flatMap((data) => data.states);
       aircraft = [...new Map(states.filter((row) => row[0] && Number.isFinite(row[5]) && Number.isFinite(row[6])).map((row) => [row[0], row])).values()].map((row) => ({
-        icao: String(row[0]).trim().toUpperCase(), callsign: String(row[1] || "").trim() || "Unknown",
+        icao: String(row[0]).trim().toUpperCase(), callsign: String(row[1] || "").trim(),
         country: row[2] || "", timePosition: row[3], lastContact: row[4],
         lon: row[5], lat: row[6], baroAltitude: row[7], onGround: Boolean(row[8]),
-        velocity: row[9], heading: row[10], verticalRate: row[11], squawk: row[14],
+        velocity: row[9], heading: row[10], verticalRate: row[11], sensors: row[12], geoAltitude: row[13], squawk: row[14],
         airlineCode: String(row[1] || "").trim().slice(0, 3).toUpperCase(),
-        aircraftType: aircraftDetailsCache.get(String(row[0]).trim().toUpperCase())?.t || aircraftCategories[row[17]] || "",
-        spi: row[15], positionSource: row[16], category: row[17]
+        aircraftType: aircraftDetailsCache.get(String(row[0]).trim().toUpperCase())?.t || "",
+        categoryLabel: aircraftCategories[row[17]] || "",
+        spi: Boolean(row[15]), positionSource: row[16], category: row[17]
       }));
       updateFlightFilters();
       renderAircraft();
@@ -255,7 +292,7 @@
     const nearUser = distanceKm(flight) <= 50;
     const marker = el("div", `plane-glyph${selected ? " selected" : ""}${nearUser ? " near-user" : ""}`);
     marker.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13.5 19v-5.5z"/></svg>';
-    if (settings.labels && !settings.standby) marker.appendChild(el("span", "plane-label", flight.callsign || flight.icao));
+    if (settings.labels && map?.getZoom() >= 7) marker.appendChild(el("span", "plane-label", flight.callsign || flight.icao));
     return marker;
   }
 
@@ -275,13 +312,14 @@
     for (const flight of visibleAircraft) {
       let marker = markers.get(flight.icao);
       if (!marker) {
-        const element = el("button", "plane-marker");
+        const element = el("button", "plane-marker marker-entering");
         element.type = "button";
         element.setAttribute("aria-label", `Aircraft ${flight.callsign}`);
         element.title = flight.callsign;
         marker = new maplibregl.Marker({ element, anchor: "center", rotationAlignment: "map" })
           .setLngLat([flight.lon, flight.lat]).addTo(map);
         element.addEventListener("click", () => openAircraft(flight.icao));
+        element.addEventListener("animationend", () => element.classList.remove("marker-entering"), { once: true });
         markers.set(flight.icao, marker);
       }
       animateMarker(marker, flight.lat, flight.lon, flight.icao);
@@ -289,7 +327,7 @@
       const glyph = marker.getElement().querySelector(".plane-glyph");
       if (glyph) glyph.style.transform = `rotate(${Number.isFinite(flight.heading) ? flight.heading : 0}deg)`;
       marker.getElement().title = flight.callsign;
-      marker.getElement().setAttribute("aria-label", `Aircraft ${flight.callsign}`);
+      marker.getElement().setAttribute("aria-label", `Aircraft ${flight.callsign || flight.icao}`);
     }
     renderNearby(visibleAircraft);
     renderTable(visibleAircraft);
@@ -369,13 +407,52 @@
       row.addEventListener("click", () => openAircraft(flight.icao));
       row.append(el("span", "mini-plane", "✈"));
       const meta = el("span", "nearby-meta");
-      meta.append(el("span", "nearby-callsign", flight.callsign), el("span", "nearby-route", `${flight.country} · ${Math.round(distanceKm(flight))} km away`));
+      meta.append(el("span", "nearby-callsign", flight.callsign || flight.icao));
+      meta.append(el("span", "nearby-route", [flight.country, `${Math.round(distanceKm(flight))} km away`].filter(Boolean).join(" · ")));
       row.append(meta);
       const value = el("span", "nearby-alt");
-      value.append(el("span", "", altitude(flight)), el("span", "", speed(flight)));
-      row.append(value);
+      if (flight.onGround) value.append(el("span", "", "On ground"));
+      else if (Number.isFinite(flight.baroAltitude)) value.append(el("span", "", altitude(flight)));
+      if (Number.isFinite(flight.velocity)) value.append(el("span", "", speed(flight)));
+      if (value.childElementCount) row.append(value);
       return row;
     }));
+  }
+  function flightMetadata(flight) {
+    return aircraftDetailsCache.get(flight.icao) || {};
+  }
+  function flightColumnValue(flight, key) {
+    const data = flightMetadata(flight);
+    const aircraftType = data.t || flight.aircraftType;
+    const values = {
+      callsign: flight.callsign,
+      icao: flight.icao,
+      registration: data.r,
+      type: aircraftType,
+      model: data.desc,
+      airline: data.ownOp || airlineNames[flight.airlineCode],
+      originCountry: flight.country,
+      origin: data.from,
+      destination: data.to,
+      altitude: flight.onGround ? "On ground" : Number.isFinite(flight.baroAltitude) ? altitude(flight) : "",
+      geometricAltitude: Number.isFinite(flight.geoAltitude) ? `${Math.round(flight.geoAltitude * 3.28084).toLocaleString()} ft` : Number.isFinite(data.alt_geom) ? `${Math.round(data.alt_geom)} ft` : "",
+      airspeed: Number.isFinite(data.ias) ? `${Math.round(data.ias)} kt IAS` : Number.isFinite(data.tas) ? `${Math.round(data.tas)} kt TAS` : "",
+      speed: Number.isFinite(flight.velocity) ? speed(flight) : "",
+      verticalSpeed: Number.isFinite(flight.verticalRate) ? `${Math.round(flight.verticalRate * 196.85)} ft/min` : "",
+      heading: Number.isFinite(flight.heading) ? heading(flight) : "",
+      squawk: flight.squawk,
+      category: data.category || flight.categoryLabel,
+      categoryId: Number.isFinite(flight.category) ? String(flight.category) : "",
+      status: data.emergency && data.emergency !== "none" ? `Emergency · ${data.emergency}` : flight.onGround ? "On ground" : "Airborne",
+      position: `${flight.lat.toFixed(3)}, ${flight.lon.toFixed(3)}`,
+      positionUpdated: Number.isFinite(flight.timePosition) ? new Date(flight.timePosition * 1000).toLocaleTimeString() : "",
+      lastContact: Number.isFinite(flight.lastContact) ? new Date(flight.lastContact * 1000).toLocaleTimeString() : "",
+      sensors: Array.isArray(flight.sensors) ? flight.sensors.join(", ") : "",
+      spi: flight.spi ? "Yes" : "",
+      positionSource: Number.isFinite(flight.positionSource) ? ["ADS-B", "ASTERIX", "MLAT", "FLARM"][flight.positionSource] || String(flight.positionSource) : "",
+      carbon: carbonRate(aircraftType)
+    };
+    return values[key] || "";
   }
   function renderTable(flights = getFilteredAircraft()) {
     const header = $("aircraft-table-head");
@@ -399,13 +476,18 @@
     }
     header.replaceChildren(headerRow);
     const query = $("aircraft-search").value.trim().toLowerCase();
-    const sorted = [...flights].filter((flight) => `${flight.callsign} ${flight.icao} ${flight.country} ${flight.airlineCode} ${flight.aircraftType}`.toLowerCase().includes(query));
+    const sorted = [...flights].filter((flight) => [
+      flight.callsign, flight.icao, flight.country, flight.airlineCode, flight.aircraftType,
+      ...["registration", "type", "model", "airline", "origin", "destination"].map((key) => flightColumnValue(flight, key))
+    ].join(" ").toLowerCase().includes(query));
     sorted.sort((a, b) => {
-      const values = {
-        callsign: [a.callsign, b.callsign], registration: ["—", "—"], type: ["—", "—"], airline: ["—", "—"],
-        altitude: [a.baroAltitude ?? -1, b.baroAltitude ?? -1], speed: [a.velocity ?? -1, b.velocity ?? -1], heading: [a.heading ?? -1, b.heading ?? -1]
-      }[sortKey] || [a.callsign, b.callsign];
-      const comparison = typeof values[0] === "number" ? values[0] - values[1] : String(values[0]).localeCompare(String(values[1]));
+      const values = [flightColumnValue(a, sortKey), flightColumnValue(b, sortKey)];
+      const numericKeys = ["altitude", "geometricAltitude", "airspeed", "speed", "verticalSpeed", "heading", "squawk"];
+      const numericValue = (flight, value) => keyToNumber(sortKey, flight, value);
+      const left = numericKeys.includes(sortKey) ? numericValue(a, values[0]) : values[0];
+      const right = numericKeys.includes(sortKey) ? numericValue(b, values[1]) : values[1];
+      const comparison = typeof left === "number" && typeof right === "number"
+        ? left - right : String(left).localeCompare(String(right));
       return comparison * (sortAscending ? 1 : -1);
     });
     if (!sorted.length) {
@@ -415,25 +497,26 @@
     $("aircraft-table-body").replaceChildren(...sorted.map((flight) => {
       const row = el("tr");
       row.addEventListener("click", () => openAircraft(flight.icao));
-      const call = el("td"); call.append(el("span", "table-callsign", flight.callsign), el("span", "table-sub", flight.icao));
-      const reg = el("td", "", "—");
-      const type = el("td", "", "—");
-      const airline = el("td", "", "—");
-      airline.title = "Operator is not provided by the OpenSky position feed.";
-      const alt = el("td", "", altitude(flight));
-      const gs = el("td", "table-speed", speed(flight));
-      const hdg = el("td", "table-speed", heading(flight));
-      const route = el("td", "", "—");
-      route.title = "Origin and destination are not provided by the OpenSky position feed.";
-      const values = {
-        callsign: call, registration: reg, type,
-        airlineLogo: el("td", "airline-logo-cell", "—"), airline,
-        altitude: alt, speed: gs, heading: hdg, origin: route, destination: el("td", "", "—")
-      };
-      values.airlineLogo.title = "An airline logo is unavailable without an operator identifier.";
-      row.append(...orderedVisibleColumns.map((key) => values[key]));
+      row.append(...orderedVisibleColumns.map((key) => {
+        const cell = el("td");
+        if (key === "callsign") {
+          cell.append(el("span", "table-callsign", flight.callsign), el("span", "table-sub", flight.icao));
+        } else {
+          cell.textContent = flightColumnValue(flight, key);
+        }
+        return cell;
+      }));
       return row;
     }));
+  }
+  function keyToNumber(key, flight, value) {
+    if (key === "altitude") return flight.baroAltitude ?? -1;
+    if (key === "geometricAltitude") return flight.geoAltitude ?? -1;
+    if (key === "speed") return flight.velocity ?? -1;
+    if (key === "heading") return flight.heading ?? -1;
+    if (key === "verticalSpeed") return flight.verticalRate ?? -1;
+    if (key === "airspeed") return flightMetadata(flight).ias ?? flightMetadata(flight).tas ?? -1;
+    return Number(value) || -1;
   }
 
   function renderStatistics() {
@@ -486,76 +569,108 @@
     }
   }
 
-  function openAircraft(icao) {
+  function openAircraft(icao, loadDetails = true) {
     const flight = aircraft.find((item) => item.icao === icao);
     if (!flight) return;
     selectedIcao = icao;
     renderAircraft();
     $("detail-kicker").textContent = settings.detailed ? "AIRCRAFT · DETAILED" : "AIRCRAFT · MINIMAL";
-    $("detail-title").textContent = flight.callsign;
+    $("detail-title").textContent = flight.callsign || flight.icao;
     const content = $("detail-content");
     content.replaceChildren();
+    const data = flightMetadata(flight);
     const summary = el("div", "detail-summary");
-    summary.append(el("strong", "", flight.icao), el("p", "", `${flight.country || "Unknown origin"} · ${flight.onGround ? "On ground" : "Airborne"}`));
+    summary.append(el("strong", "", flight.callsign || flight.icao));
+    const summaryText = [flight.country, flight.onGround ? "On ground" : "Airborne"].filter(Boolean).join(" · ");
+    if (summaryText) summary.append(el("p", "", summaryText));
     content.append(summary);
-    const minimalFields = [
-      ["Callsign", flight.callsign], ["Aircraft type", "Not provided by position feed"],
-      ["Altitude", altitude(flight)], ["Speed", speed(flight)]
-    ];
-    const extraFields = [
-      ["Callsign", flight.callsign], ["Registration", "Loading aircraft registry…"], ["ICAO24", flight.icao],
-      ["Aircraft type", "Loading aircraft registry…"], ["Aircraft model", "Loading aircraft registry…"],
-      ["Airline", "Not provided by position feed"], ["Operator", "Loading aircraft registry…"], ["Origin", "Not provided by position feed"],
-      ["Destination", "Not provided by position feed"], ["Barometric altitude", altitude(flight)],
-      ["Geometric altitude", flight.onGround ? "On ground" : "Not provided"],
-      ["Airspeed", "Not provided by position feed"], ["Ground speed", speed(flight)],
-      ["Vertical speed", Number.isFinite(flight.verticalRate) ? `${Math.round(flight.verticalRate * 196.85)} ft/min` : "—"],
-      ["Heading", heading(flight)], ["Squawk", flight.squawk || "—"],
-      ["Aircraft category", flight.category ?? "Not provided by position feed"],
-      ["Flight status", flight.onGround ? "On ground" : "Airborne"], ["Origin country", flight.country],
+    const fields = [
+      ["Callsign", flight.callsign], ["Registration", data.r], ["ICAO24", flight.icao],
+      ["Aircraft type", data.t || flight.aircraftType], ["Aircraft model", data.desc],
+      ["Airline", data.ownOp || airlineNames[flight.airlineCode]], ["Operator", data.ownOp],
+      ["Origin", data.from], ["Destination", data.to],
+      ["Altitude", flight.onGround ? "On ground" : Number.isFinite(flight.baroAltitude) ? altitude(flight) : ""],
+      ["Airspeed", Number.isFinite(data.ias) ? `${Math.round(data.ias)} kt IAS` : Number.isFinite(data.tas) ? `${Math.round(data.tas)} kt TAS` : ""],
+      ["Ground speed", Number.isFinite(flight.velocity) ? speed(flight) : ""],
+      ["Vertical speed", Number.isFinite(flight.verticalRate) ? `${Math.round(flight.verticalRate * 196.85)} ft/min` : ""],
+      ["Heading", Number.isFinite(flight.heading) ? heading(flight) : ""], ["Squawk", flight.squawk],
+      ["Aircraft category", data.category || flight.categoryLabel],
+      ["Flight status", data.emergency && data.emergency !== "none" ? `Emergency · ${data.emergency}` : flight.onGround ? "On ground" : "Airborne"], ["Origin country", flight.country],
       ["Latitude", `${flight.lat.toFixed(5)}°`], ["Longitude", `${flight.lon.toFixed(5)}°`],
-      ["Position updated", flight.timePosition ? new Date(flight.timePosition * 1000).toLocaleTimeString() : "—"]
-    ];
+      ["Position updated", flight.timePosition ? new Date(flight.timePosition * 1000).toLocaleTimeString() : ""],
+      ["Last contact", Number.isFinite(flight.lastContact) ? new Date(flight.lastContact * 1000).toLocaleTimeString() : ""],
+      ["Geometric altitude", Number.isFinite(flight.geoAltitude) ? `${Math.round(flight.geoAltitude * 3.28084).toLocaleString()} ft` : Number.isFinite(data.alt_geom) ? `${Math.round(data.alt_geom)} ft` : ""],
+      ["Position source", Number.isFinite(flight.positionSource) ? ["ADS-B", "ASTERIX", "MLAT", "FLARM"][flight.positionSource] || String(flight.positionSource) : ""],
+      ["Sensors", Array.isArray(flight.sensors) ? flight.sensors.join(", ") : ""],
+      ["Special purpose indicator", typeof flight.spi === "boolean" ? flight.spi ? "Yes" : "No" : ""],
+      ["ADS-B category ID", Number.isFinite(flight.category) ? String(flight.category) : ""]
+    ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "");
+    const detailLabels = settings.detailed ? fields : fields.filter(([label]) => ["Callsign", "Aircraft type", "Altitude", "Ground speed"].includes(label));
     const section = el("div", "detail-section");
     section.append(el("h3", "", settings.detailed ? "FLIGHT INFORMATION" : "FLIGHT SNAPSHOT"));
     const grid = el("div", "detail-grid");
-    for (const [label, value] of settings.detailed ? extraFields : minimalFields) {
+    for (const [label, value] of detailLabels) {
       const field = el("div", "detail-field");
-      field.append(el("span", "", label), el("strong", value === "—" ? "empty" : "", value));
+      field.append(el("span", "", label), el("strong", "", String(value)));
       grid.append(field);
     }
     section.append(grid);
     content.append(section);
-    const footprint = el("div", "detail-section carbon-section");
-    footprint.append(el("h3", "", "FLIGHT CARBON ESTIMATE"));
-    footprint.append(el("div", "airport-condition carbon-estimate", carbonEstimate(flight)));
-    footprint.append(el("small", "carbon-note", "Indicative cruise-rate estimate only; not a whole-flight total."));
-    content.append(footprint);
-    if (settings.detailed) enrichAircraftDetails(flight, grid);
+    appendCarbonEstimate(content, data.t || flight.aircraftType);
+    if (settings.detailed) {
+      const additional = Object.entries(data).filter(([key, value]) =>
+        !["hex", "type", "flight", "r", "t", "desc", "ownOp", "alt_baro", "alt_geom", "ias", "tas", "gs", "baro_rate", "track", "squawk", "category", "emergency", "lat", "lon", "from", "to", "seen", "seen_pos", "messages", "mlat", "tisb", "nav_modes"].includes(key) &&
+        (typeof value === "number" || typeof value === "boolean" || typeof value === "string") && String(value).trim()
+      );
+      if (additional.length) {
+        const extraSection = el("div", "detail-section");
+        extraSection.append(el("h3", "", "ADDITIONAL AIRCRAFT DATA"));
+        const extraGrid = el("div", "detail-grid");
+        for (const [key, value] of additional) {
+          const field = el("div", "detail-field");
+          field.append(el("span", "", key.replaceAll("_", " ")), el("strong", "", String(value)));
+          extraGrid.append(field);
+        }
+        extraSection.append(extraGrid);
+        content.append(extraSection);
+      }
+    }
+    if (settings.detailed && loadDetails) enrichAircraftDetails(flight);
     $("detail-panel").classList.add("open");
     $("detail-panel").setAttribute("aria-hidden", "false");
     $("panel-scrim").classList.remove("hidden");
   }
 
-  function setDetailField(grid, label, value) {
-    const field = [...grid.querySelectorAll(".detail-field")].find((item) => item.querySelector("span")?.textContent === label);
-    if (field && value !== undefined && value !== null && value !== "") field.querySelector("strong").textContent = String(value);
-  }
-  function carbonEstimate(flight, aircraftType = flight.aircraftType) {
-    const type = String(aircraftType || "").toUpperCase();
+  function carbonRate(aircraftType) {
+    if (!aircraftType) return "";
+    const type = String(aircraftType).toUpperCase();
     const hourlyKg = /^(B74|B77|B78|A33|A34|A35|A38|A30)/.test(type) ? 20_000
       : /^(ATR|AT[467]|DH8|DHC|E[12])/.test(type) ? 1_200 : 7_500;
-    const estimateLabel = aircraftType ? "type-based" : "generic jet";
-    return `≈ ${(hourlyKg / 1000).toFixed(1)} tonnes CO₂ per airborne hour (${estimateLabel})`;
+    return `≈ ${(hourlyKg / 1000).toFixed(1)} t/h`;
   }
-  async function enrichAircraftDetails(flight, grid) {
+  function appendCarbonEstimate(content, aircraftType) {
+    const rate = carbonRate(aircraftType);
+    if (!rate) return;
+    const intensity = Math.min(100, Number.parseFloat(rate.match(/[\d.]+/)?.[0] || "0") / 20 * 100);
+    const section = el("div", "detail-section carbon-section");
+    section.append(el("h3", "", "ESTIMATED CO₂ RATE"));
+    const indicator = el("div", "carbon-indicator");
+    indicator.style.setProperty("--carbon-progress", `${intensity}%`);
+    indicator.append(el("strong", "", rate), el("span", "", "per airborne hour"));
+    section.append(indicator, el("small", "carbon-note", "Indicative aircraft-type estimate, not a whole-flight total."));
+    content.append(section);
+  }
+  async function enrichAircraftDetails(flight) {
+    if (aircraftDetailsAttempted.has(flight.icao)) return;
+    aircraftDetailsAttempted.add(flight.icao);
     try {
       let data = aircraftDetailsCache.get(flight.icao);
       if (!data) {
         const response = await fetch(`https://api.adsb.lol/v2/hex/${encodeURIComponent(flight.icao)}`);
-        if (!response.ok) throw new Error(`ADS-B registry returned HTTP ${response.status}`);
-        const result = await response.json();
-        data = result.ac?.[0] || null;
+        if (response.ok) {
+          const result = await response.json();
+          data = result.ac?.[0] || null;
+        }
         if (!data) {
           const fallback = await fetch(`https://hexdb.io/api/v1/aircraft/${encodeURIComponent(flight.icao)}`);
           if (!fallback.ok) throw new Error(`Aircraft registry returned HTTP ${fallback.status}`);
@@ -565,26 +680,11 @@
             ownOp: registry.RegisteredOwners
           };
         }
-        aircraftDetailsCache.set(flight.icao, data);
       }
-      const fields = {
-        Registration: data.r, "Aircraft type": data.t, "Aircraft model": data.desc,
-        Airline: data.ownOp, Operator: data.ownOp, Origin: data.from, Destination: data.to,
-        "Barometric altitude": data.alt_baro === "ground" ? "On ground" : Number.isFinite(data.alt_baro) ? `${Math.round(data.alt_baro)} ft` : undefined,
-        "Geometric altitude": Number.isFinite(data.alt_geom) ? `${Math.round(data.alt_geom)} ft` : undefined,
-        "Airspeed": Number.isFinite(data.ias) ? `${Math.round(data.ias)} kt indicated` : Number.isFinite(data.tas) ? `${Math.round(data.tas)} kt true` : undefined,
-        "Ground speed": Number.isFinite(data.gs) ? `${Math.round(data.gs)} kt` : undefined,
-        "Vertical speed": Number.isFinite(data.baro_rate) ? `${Math.round(data.baro_rate)} ft/min` : undefined,
-        Heading: Number.isFinite(data.track) ? `${Math.round(data.track)}°` : undefined,
-        Squawk: data.squawk, "Aircraft category": data.category,
-        "Flight status": data.alt_baro === "ground" ? "On ground" : data.emergency && data.emergency !== "none" ? `Emergency · ${data.emergency}` : "Airborne",
-        Latitude: Number.isFinite(data.lat) ? `${data.lat.toFixed(5)}°` : undefined,
-        Longitude: Number.isFinite(data.lon) ? `${data.lon.toFixed(5)}°` : undefined
-      };
+      data ||= {};
+      aircraftDetailsCache.set(flight.icao, data);
       flight.aircraftType = data.t || flight.aircraftType;
       updateFlightFilters();
-      const estimate = document.querySelector(".carbon-estimate");
-      if (estimate) estimate.textContent = carbonEstimate(flight, data.t);
       const photoUrl = [data.image, data.photo, data.photo_url].find((url) => typeof url === "string" && /^https:\/\/[^ ]+$/i.test(url));
       if (photoUrl && !document.querySelector(".aircraft-photo")) {
         const image = el("img", "aircraft-photo");
@@ -596,34 +696,11 @@
         $("detail-content").prepend(image);
       }
       renderAircraft();
-      for (const [label, value] of Object.entries(fields)) setDetailField(grid, label, value);
-      for (const label of ["Registration", "Aircraft type", "Aircraft model", "Operator"]) {
-        const field = [...grid.querySelectorAll(".detail-field")].find((item) => item.querySelector("span")?.textContent === label);
-        const value = field?.querySelector("strong");
-        if (value?.textContent === "Loading aircraft registry…") value.textContent = "Not provided by ADS-B feed";
-      }
-
-      const additional = Object.entries(data).filter(([key, value]) =>
-        !["hex", "type", "flight", "r", "t", "desc", "ownOp", "alt_baro", "alt_geom", "ias", "tas", "gs", "baro_rate", "track", "squawk", "category", "emergency", "lat", "lon"].includes(key) &&
-        (typeof value === "number" || typeof value === "boolean" || typeof value === "string")
-      );
-      if (additional.length) {
-        const section = el("div", "detail-section");
-        section.append(el("h3", "", "ADDITIONAL ADS-B DATA"));
-        const additionalGrid = el("div", "detail-grid");
-        for (const [key, value] of additional) {
-          const field = el("div", "detail-field");
-          field.append(el("span", "", key.replaceAll("_", " ")), el("strong", "", String(value)));
-          additionalGrid.append(field);
-        }
-        section.append(additionalGrid);
-        grid.closest(".detail-section").after(section);
-      }
+      if (selectedIcao === flight.icao) openAircraft(flight.icao, false);
     } catch (error) {
       console.error(`Aircraft metadata lookup failed for ${flight.icao}.`, error);
-      for (const label of ["Registration", "Aircraft type", "Aircraft model", "Operator"]) {
-        setDetailField(grid, label, "Unavailable from public registries");
-      }
+      aircraftDetailsCache.set(flight.icao, {});
+      if (selectedIcao === flight.icao) openAircraft(flight.icao, false);
     }
   }
 
@@ -731,9 +808,30 @@
       if (!response.ok) throw new Error(data.error?.message || `ISS tracker returned HTTP ${response.status}`);
       issMarker.setLngLat([data.longitude, data.latitude]);
       $("iss-button").title = `ISS · ${Math.round(data.altitude)} km altitude`;
+      if (centerIssWhenLoaded) {
+        centerIssWhenLoaded = false;
+        map.flyTo({ center: [data.longitude, data.latitude], zoom: Math.max(map.getZoom(), 4), duration: 1400, essential: true });
+      }
     } catch (error) {
       console.error("Unable to update ISS position.", error);
     }
+  }
+  function centerOnISS() {
+    if (!settings.iss) {
+      centerIssWhenLoaded = true;
+      settings.iss = true;
+      saveSettings();
+      setISSTracking(true);
+      return;
+    }
+    const position = issMarker?.getLngLat();
+    if (position) map?.flyTo({ center: [position.lng, position.lat], zoom: Math.max(map.getZoom(), 4), duration: 1400, essential: true });
+    else centerIssWhenLoaded = true;
+  }
+  function toggleISSTracking() {
+    settings.iss = !settings.iss;
+    saveSettings();
+    setISSTracking(settings.iss);
   }
   function setISSTracking(enabled) {
     $("iss-button").setAttribute("aria-pressed", String(enabled));
@@ -902,6 +1000,7 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || `Radio directory returned HTTP ${response.status}`);
       radioStations = data.stations || [];
+      if (data.warning) showMessage(data.warning);
       select.replaceChildren(new Option(radioStations.length ? "Choose an Irish station…" : "No secure streams available", ""));
       for (const [index, station] of radioStations.entries()) select.append(new Option(station.name, String(index)));
     } catch (error) {
@@ -916,13 +1015,62 @@
       showMessage("Paste a Spotify track, album, playlist, show or episode link.");
       return;
     }
-    const frame = document.createElement("iframe");
-    frame.title = "Spotify player";
-    frame.loading = "lazy";
-    frame.allow = "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture";
-    frame.src = `https://open.spotify.com/embed/${match[1].toLowerCase()}/${match[2]}`;
-    $("spotify-embed").replaceChildren(frame);
+    spotifyUri = `spotify:${match[1].toLowerCase()}:${match[2]}`;
+    setNowPlaying("Spotify", "", false);
+    $("spotify-entry").classList.add("hidden");
+    $("spotify-edit").classList.remove("hidden");
     $("spotify-embed").classList.remove("hidden");
+    if (spotifyIframeApi) {
+      createSpotifyPlayer(spotifyIframeApi);
+      return;
+    }
+    window.onSpotifyIframeApiReady = (api) => {
+      spotifyIframeApi = api;
+      createSpotifyPlayer(api);
+    };
+    if (!document.querySelector('script[data-spotify-iframe-api]')) {
+      const script = document.createElement("script");
+      script.src = "https://open.spotify.com/embed/iframe-api/v1";
+      script.async = true;
+      script.dataset.spotifyIframeApi = "true";
+      script.addEventListener("error", () => {
+        const embed = $("spotify-embed");
+        let mount = $("spotify-player");
+        if (!mount) {
+          mount = el("div");
+          mount.id = "spotify-player";
+          embed.replaceChildren(mount);
+        }
+        const frame = document.createElement("iframe");
+        frame.title = "Spotify player";
+        frame.loading = "lazy";
+        frame.allow = "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture";
+        const [, type, id] = spotifyUri.split(":");
+        frame.src = `https://open.spotify.com/embed/${type}/${id}`;
+        mount.replaceChildren(frame);
+      }, { once: true });
+      document.head.append(script);
+    }
+  }
+  function createSpotifyPlayer(api) {
+    const embed = $("spotify-embed");
+    let mount = $("spotify-player");
+    if (!mount) {
+      mount = el("div");
+      mount.id = "spotify-player";
+      embed.replaceChildren(mount);
+    } else {
+      mount.replaceChildren();
+    }
+    spotifyController?.destroy?.();
+    api.createController(mount, { uri: spotifyUri, width: "100%", height: 152 }, (controller) => {
+      spotifyController = controller;
+      controller.addListener("playback_update", (event) => {
+        const paused = event.data?.isPaused !== false;
+        const title = event.data?.track?.name || "Spotify";
+        setNowPlaying("Spotify", title, !paused);
+      });
+    });
   }
   async function loadIncidents() {
     const list = $("incident-list");
@@ -932,18 +1080,30 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || `Incident feed returned HTTP ${response.status}`);
       if (!data.incidents?.length) throw new Error("No recent incident reports were returned.");
-      list.replaceChildren(...data.incidents.map((incident) => {
+      incidentReports = data.incidents;
+      renderIncidentReports();
+    } catch (error) {
+      console.error("Unable to load aviation incidents.", error);
+      const retry = el("div", "empty-row", "The external incident feed is temporarily unavailable.");
+      list.replaceChildren(retry);
+    }
+  }
+  function renderIncidentReports() {
+    const list = $("incident-list");
+    const severityRank = { Critical: 4, High: 3, Moderate: 2, Report: 1 };
+    const reports = [...incidentReports].sort((a, b) => {
+      if (incidentSort === "severity") return (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0) || (b.occurrenceTime || 0) - (a.occurrenceTime || 0);
+      if (incidentSort === "type") return String(a.aircraftType || "").localeCompare(String(b.aircraftType || ""));
+      if (incidentSort === "location") return String(a.location || "").localeCompare(String(b.location || ""));
+      return (b.occurrenceTime || 0) - (a.occurrenceTime || 0);
+    });
+    list.replaceChildren(...reports.map((incident) => {
         const card = el("article", "incident-card info-card");
-        if (incident.image) {
-          const image = el("img", "incident-image");
-          image.src = incident.image;
-          image.alt = "";
-          image.loading = "lazy";
-          image.referrerPolicy = "no-referrer";
-          image.addEventListener("error", () => image.remove(), { once: true });
-          card.append(image);
-        }
-        card.append(el("span", "eyebrow", incident.date || "AVIATION REPORT"), el("h3", "", incident.title));
+        const headline = el("div", "incident-headline");
+        const time = incident.occurrenceTime ? new Date(incident.occurrenceTime).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : incident.date || "Time not reported";
+        headline.append(el("span", "eyebrow", time));
+        if (incident.severity) headline.append(el("span", `incident-severity severity-${String(incident.severity).toLowerCase()}`, incident.severity));
+        card.append(headline, el("h3", "", incident.title));
         if (incident.aircraftType || incident.location) {
           const details = el("div", "incident-details");
           if (incident.aircraftType) details.append(el("span", "", incident.aircraftType));
@@ -958,44 +1118,135 @@
         card.append(link);
         return card;
       }));
-    } catch (error) {
-      console.error("Unable to load aviation incidents.", error);
-      const retry = el("div", "empty-row", "The external incident feed is temporarily unavailable.");
-      list.replaceChildren(retry);
+  }
+  function configureQuizPlayers() {
+    const count = Number($("quiz-player-count").value) || 1;
+    const names = [...$("quiz-player-names").querySelectorAll("input")].map((input) => input.value.trim());
+    const previous = [...quizPlayers];
+    quizPlayers.splice(0, quizPlayers.length, ...Array.from({ length: count }, (_value, index) => ({
+      name: names[index] || settings.quizNames?.[index] || previous[index]?.name || `Player ${index + 1}`,
+      score: previous[index]?.score || 0
+    })));
+    $("quiz-player-names").replaceChildren(...quizPlayers.map((player, index) => {
+      const label = el("label", "quiz-name-field", `Player ${index + 1}`);
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 24;
+      input.value = player.name;
+      input.setAttribute("aria-label", `Player ${index + 1} name`);
+      input.addEventListener("input", () => {
+        player.name = input.value.trim() || `Player ${index + 1}`;
+        settings.quizNames = quizPlayers.map((item) => item.name);
+        saveSettings();
+        renderQuizScoreboard();
+        updateQuizTurnLabel();
+      });
+      label.append(input);
+      return label;
+    }));
+    settings.quizNames = quizPlayers.map((player) => player.name);
+    renderQuizScoreboard();
+    startQuizRound();
+  }
+  function renderQuizScoreboard(showWinner = false) {
+    const scoreboard = $("quiz-scoreboard");
+    scoreboard.replaceChildren(...quizPlayers.map((player, index) => {
+      const item = el("div", `quiz-player-score${index === quizPlayerIndex ? " active" : ""}`);
+      item.append(el("span", "", player.name), el("strong", "", String(player.score)));
+      return item;
+    }));
+    if (showWinner && quizPlayers.length) {
+      const highestScore = Math.max(...quizPlayers.map((player) => player.score));
+      const winners = quizPlayers.filter((player) => player.score === highestScore);
+      scoreboard.append(el("div", "quiz-winner", winners.length === 1
+        ? `${winners[0].name} leads with ${highestScore} point${highestScore === 1 ? "" : "s"}`
+        : `Tie at ${highestScore} point${highestScore === 1 ? "" : "s"}`));
     }
+  }
+  function updateQuizTurnLabel() {
+    const player = quizPlayers[quizPlayerIndex];
+    $("quiz-turn-label").textContent = player ? `${player.name.toUpperCase()} · ${quizPlayerIndex + 1}/${quizPlayers.length}` : "";
   }
   function startAirportQuiz() {
     currentQuizMode = $("quiz-mode").value;
-    currentQuizAirport = quizAirports[Math.floor(Math.random() * quizAirports.length)];
-    $("quiz-region").textContent = currentQuizAirport.country.toUpperCase();
-    $("quiz-airport-name").textContent = currentQuizAirport.name;
+    startQuizRound();
+  }
+  function startQuizRound() {
+    if (!quizPlayers.length) {
+      configureQuizPlayers();
+      return;
+    }
+    quizPlayerIndex = 0;
+    const shared = quizAirports[Math.floor(Math.random() * quizAirports.length)];
+    quizRoundAirports = quizPlayers.map(() => $("quiz-same-question").checked
+      ? shared
+      : quizAirports[Math.floor(Math.random() * quizAirports.length)]);
+    showQuizQuestion();
+  }
+  function showQuizQuestion() {
+    clearInterval(quizTimer);
+    $("quiz-next").classList.remove("active");
+    const airport = quizRoundAirports[quizPlayerIndex];
+    if (!airport) return;
+    currentQuizMode = $("quiz-mode").value;
+    $("quiz-region").textContent = airport.country.toUpperCase();
+    $("quiz-airport-name").textContent = airport.name;
     $("quiz-airport-clue").textContent = currentQuizMode === "airline"
-      ? `Which airline is most closely associated with ${currentQuizAirport.iata}?`
+      ? `Which airline is most closely associated with ${airport.iata}?`
       : `Identify the ${currentQuizMode.toUpperCase()} code for this airport.`;
     $("quiz-feedback").textContent = "";
     $("quiz-options").replaceChildren();
     $("quiz-next").classList.add("hidden");
-    const property = currentQuizMode;
-    const correct = currentQuizAirport[property];
-    const distractors = [...new Set(quizAirports.map((airport) => airport[property]).filter((answer) => answer !== correct))];
+    $("quiz-timer").classList.toggle("hidden", !$("quiz-timer-enabled").checked);
+    updateQuizTurnLabel();
+    const correct = airport[currentQuizMode];
+    const distractors = [...new Set(quizAirports.map((item) => item[currentQuizMode]).filter((answer) => answer !== correct))];
     const choices = [correct, ...distractors.sort(() => Math.random() - 0.5).slice(0, 3)].sort(() => Math.random() - 0.5);
     for (const answer of choices) {
       const button = el("button", "quiz-choice", answer);
       button.type = "button";
-      button.addEventListener("click", () => {
-        const right = answer === correct;
-        if (right) {
-          airportQuizScore += 1;
-          $("quiz-score").textContent = String(airportQuizScore);
-        }
-        $("quiz-feedback").textContent = right ? "Correct — +1 point." : `Not quite — the answer is ${correct}.`;
-        $("quiz-feedback").classList.toggle("correct", right);
-        $("quiz-feedback").classList.toggle("incorrect", !right);
-        $("quiz-options").querySelectorAll("button").forEach((choice) => { choice.disabled = true; });
-        $("quiz-next").classList.remove("hidden");
-      });
+      button.addEventListener("click", () => answerQuiz(answer, correct));
       $("quiz-options").append(button);
     }
+    if ($("quiz-timer-enabled").checked) {
+      quizSeconds = 20;
+      $("quiz-timer").textContent = String(quizSeconds);
+      quizTimer = setInterval(() => {
+        quizSeconds -= 1;
+        $("quiz-timer").textContent = String(quizSeconds);
+        if (quizSeconds <= 0) answerQuiz("", correct, true);
+      }, 1000);
+    }
+    renderQuizScoreboard();
+  }
+  function answerQuiz(answer, correct, timedOut = false) {
+    if ($("quiz-next").classList.contains("active")) return;
+    clearInterval(quizTimer);
+    $("quiz-next").classList.add("active");
+    const right = answer === correct;
+    if (right) quizPlayers[quizPlayerIndex].score += 1;
+    $("quiz-feedback").textContent = timedOut ? `Time's up — the answer is ${correct}.`
+      : right ? "Correct — +1 point." : `Not quite — the answer is ${correct}.`;
+    $("quiz-feedback").classList.toggle("correct", right);
+    $("quiz-feedback").classList.toggle("incorrect", !right);
+    $("quiz-options").querySelectorAll("button").forEach((choice) => {
+      choice.disabled = true;
+      if (choice.textContent === correct) choice.classList.add("correct-answer");
+    });
+    const finalPlayer = quizPlayerIndex === quizPlayers.length - 1;
+    $("quiz-next").textContent = finalPlayer ? "Next round" : "Next player";
+    $("quiz-next").classList.remove("hidden");
+    renderQuizScoreboard(finalPlayer);
+  }
+  function advanceQuiz() {
+    if (!$("quiz-next").classList.contains("active")) return;
+    if (quizPlayerIndex < quizPlayers.length - 1) {
+      quizPlayerIndex += 1;
+      showQuizQuestion();
+    } else {
+      startQuizRound();
+    }
+    $("quiz-next").classList.remove("active");
   }
 
   async function searchLocation(query) {
@@ -1065,6 +1316,7 @@
     $("standby-overlay").classList.toggle("hidden", !enabled);
     $("standby-button").classList.toggle("active", enabled);
     $("setting-standby").checked = enabled;
+    $("media-box").classList.toggle("hidden", enabled);
     if (map) {
       for (const interaction of ["scrollZoom", "dragPan", "doubleClickZoom", "touchZoomRotate", "boxZoom", "keyboard"]) {
         map[interaction][enabled ? "disable" : "enable"]();
@@ -1079,13 +1331,21 @@
     saveSettings();
     renderAircraft();
   }
+  function setClockDisplay(element, date, seconds = false) {
+    const formatted = formatClock(date);
+    const match = settings.clockFormat === "12" ? formatted.match(/^(.*?)\s+(AM|PM)$/i) : null;
+    const time = match ? match[1] : formatted;
+    element.replaceChildren(document.createTextNode(seconds
+      ? `${time}:${String(date.getSeconds()).padStart(2, "0")}`
+      : time));
+    if (match) element.append(el("span", "clock-period", match[2].toUpperCase()));
+  }
   function updateClock() {
     const now = new Date();
-    const time = formatClock(now);
-    $("header-clock").textContent = `${time}:${String(now.getSeconds()).padStart(2, "0")}`;
-    $("mini-clock").textContent = time;
+    setClockDisplay($("header-clock"), now, true);
+    setClockDisplay($("mini-clock"), now);
     $("clock-date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-    $("standby-clock").textContent = time;
+    setClockDisplay($("standby-clock"), now);
     $("standby-date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
     $("standby-clock").className = `standby-time ${settings.clockStyle}`;
     $("mini-clock").className = `mini-clock ${settings.clockStyle}`;
@@ -1094,16 +1354,59 @@
     document.querySelector(".weather-main").classList.toggle("hidden", !settings.weather);
     document.querySelector(".weather-stats").classList.toggle("hidden", !settings.weather);
     $("standby-weather").classList.toggle("hidden", !settings.weather || !weatherData);
+    syncNowPlaying();
+  }
+  function syncNowPlaying() {
+    const active = settings.nowPlaying && Boolean(nowPlayingTitle);
+    const nowLabel = active ? `Now Playing · ${nowPlayingKind} · ${nowPlayingTitle}` : "";
+    $("dashboard-now-playing").textContent = nowLabel;
+    $("dashboard-now-playing").classList.toggle("hidden", !active);
+    $("standby-now-playing").textContent = nowLabel;
+    $("standby-now-playing").classList.toggle("hidden", !active);
+    $("standby-weather").classList.toggle("rotation-visible", settings.weather && !nowPlayingAlternate);
+    $("standby-now-playing").classList.toggle("rotation-visible", active && nowPlayingAlternate);
+    $("standby-weather").setAttribute("aria-hidden", String(!settings.weather || nowPlayingAlternate));
+    $("standby-now-playing").setAttribute("aria-hidden", String(!active || !nowPlayingAlternate));
+    if (active && settings.weather) {
+      if (!nowPlayingRotationTimer) {
+        nowPlayingRotationTimer = setInterval(() => {
+          nowPlayingAlternate = !nowPlayingAlternate;
+          $("standby-weather").classList.toggle("rotation-visible", !nowPlayingAlternate);
+          $("standby-now-playing").classList.toggle("rotation-visible", nowPlayingAlternate);
+          $("standby-weather").setAttribute("aria-hidden", String(nowPlayingAlternate));
+          $("standby-now-playing").setAttribute("aria-hidden", String(!nowPlayingAlternate));
+        }, 4500);
+      }
+    } else {
+      clearInterval(nowPlayingRotationTimer);
+      nowPlayingRotationTimer = undefined;
+      nowPlayingAlternate = false;
+      $("standby-weather").classList.toggle("rotation-visible", settings.weather);
+      $("standby-now-playing").classList.remove("rotation-visible");
+      $("standby-weather").setAttribute("aria-hidden", String(!settings.weather));
+      $("standby-now-playing").setAttribute("aria-hidden", "true");
+    }
+  }
+  function setNowPlaying(kind, title = "", active = true) {
+    if (active) playingMedia.set(kind, title);
+    else playingMedia.delete(kind);
+    const current = [...playingMedia.entries()].at(-1) || ["", ""];
+    [nowPlayingKind, nowPlayingTitle] = current;
+    syncNowPlaying();
   }
   function applyTheme() {
     const themes = ["dark", "light", "amoled", "liquid", "christmas", "retro"];
-    if (!themes.includes(settings.theme)) settings.theme = "dark";
+    if (!themes.includes(settings.theme)) settings.theme = "amoled";
     document.body.classList.toggle("light-theme", settings.theme === "light");
     document.body.classList.remove(...themes.map((theme) => `theme-${theme}`));
     document.body.classList.add(`theme-${settings.theme}`);
     $("setting-theme").value = settings.theme;
-    document.documentElement.style.setProperty("--accent", settings.accent);
+    const resolvedAccent = settings.autoAccent ? (settings.theme === "light" ? "#14181d" : "#ffffff") : settings.accent;
+    document.documentElement.style.setProperty("--accent", resolvedAccent);
     document.querySelectorAll("[data-accent]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.accent === settings.accent)));
+    $("setting-auto-accent").checked = settings.autoAccent;
+    $("setting-accent").disabled = settings.autoAccent;
+    document.querySelectorAll("[data-accent]").forEach((button) => { button.disabled = settings.autoAccent; });
     if (map) map.setStyle(settings.theme === "light" ? "https://tiles.openfreemap.org/styles/bright" : "https://tiles.openfreemap.org/styles/dark");
   }
   function installAccentControls() {
@@ -1141,14 +1444,19 @@
     tableWrap.before(tools);
   }
   function syncSettingsControls() {
-    for (const key of ["weather", "sun", "labels", "airports", "detailed", "standby"]) {
-      $(`setting-${key}`).checked = settings[key];
+    for (const key of ["weather", "sun", "labels", "airports", "radio", "nowPlaying", "detailed", "standby"]) {
+      const controlKey = key === "nowPlaying" ? "now-playing" : key;
+      $(`setting-${controlKey}`).checked = settings[key];
     }
     $("setting-clock-format").value = settings.clockFormat;
     $("setting-clock-style").value = settings.clockStyle;
     $("labels-button").setAttribute("aria-pressed", String(settings.labels));
     $("airports-button").setAttribute("aria-pressed", String(settings.airports));
     $("iss-button").setAttribute("aria-pressed", String(settings.iss));
+    $("radio-controls").classList.toggle("hidden", !settings.radio);
+    $("quiz-player-count").value = String(settings.quizPlayerCount || 1);
+    $("quiz-same-question").checked = settings.quizSameQuestion;
+    $("quiz-timer-enabled").checked = settings.quizTimer;
     applyTheme();
     setLocationLabel();
     setStandby(settings.standby);
@@ -1226,10 +1534,10 @@
     const labels = {
       "map-page": ["THE WORLD ABOVE YOU", "Live map"],
       "traffic-page": ["LIVE · YOUR AIRSPACE", "Traffic board"],
-      "flight-page": ["A SEPARATE FLIGHT EXPERIENCE", "AeroAM Flight"],
       "games-page": ["AIRPORT KNOWLEDGE", "Airport quiz"],
       "incidents-page": ["EXTERNAL AVIATION NEWS", "Incident feed"],
-      "statistics-page": ["CURRENT MAP VIEW", "Live statistics"]
+      "statistics-page": ["CURRENT MAP VIEW", "Live statistics"],
+      "about-page": ["AEROAM", "About"]
     };
     $("page-eyebrow").textContent = labels[pageId][0];
     $("page-title").textContent = labels[pageId][1];
@@ -1258,10 +1566,22 @@
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setStandby(false); closeSettings(); closeDetails(); } });
   $("zoom-in").addEventListener("click", () => map?.zoomIn());
   $("zoom-out").addEventListener("click", () => map?.zoomOut());
-  $("iss-button").addEventListener("click", () => {
-    settings.iss = !settings.iss;
-    saveSettings();
-    setISSTracking(settings.iss);
+  $("iss-button").addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (issClickTimer) {
+      clearTimeout(issClickTimer);
+      issClickTimer = undefined;
+      centerOnISS();
+      return;
+    }
+    issClickTimer = setTimeout(() => {
+      issClickTimer = undefined;
+      toggleISSTracking();
+    }, 280);
+  });
+  $("iss-button").addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
   });
   $("labels-button").addEventListener("click", () => {
     settings.labels = !settings.labels;
@@ -1293,6 +1613,15 @@
       player.pause();
       player.removeAttribute("src");
       player.load();
+      setNowPlaying("Radio", "", false);
+      return;
+    }
+    if (station.externalUrl) {
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+      window.open(station.externalUrl, "_blank", "noopener,noreferrer");
+      setNowPlaying("Radio", station.name.replace(/\s*·\s*official player/i, ""));
       return;
     }
     player.src = station.url;
@@ -1308,17 +1637,55 @@
     $("radio-player").removeAttribute("src");
     $("radio-player").load();
     $("radio-station").value = "";
+    setNowPlaying("Radio", "", false);
   });
   $("spotify-load").addEventListener("click", loadSpotifyEmbed);
   $("spotify-link").addEventListener("keydown", (event) => { if (event.key === "Enter") loadSpotifyEmbed(); });
+  $("spotify-edit").addEventListener("click", () => {
+    $("spotify-entry").classList.remove("hidden");
+    $("spotify-edit").classList.add("hidden");
+    $("spotify-link").focus();
+  });
+  $("radio-player").addEventListener("play", () => {
+    const station = radioStations[Number($("radio-station").value)];
+    if (station) setNowPlaying("Radio", station.name);
+  });
+  $("radio-player").addEventListener("pause", () => setNowPlaying("Radio", "", false));
+  $("radio-player").addEventListener("ended", () => setNowPlaying("Radio", "", false));
   $("quiz-mode").addEventListener("change", startAirportQuiz);
-  $("quiz-next").addEventListener("click", startAirportQuiz);
+  $("quiz-next").addEventListener("click", advanceQuiz);
+  $("quiz-player-count").addEventListener("change", (event) => {
+    settings.quizPlayerCount = Number(event.target.value);
+    saveSettings();
+    configureQuizPlayers();
+  });
+  $("quiz-same-question").addEventListener("change", (event) => {
+    settings.quizSameQuestion = event.target.checked;
+    saveSettings();
+    startQuizRound();
+  });
+  $("quiz-timer-enabled").addEventListener("change", (event) => {
+    settings.quizTimer = event.target.checked;
+    saveSettings();
+    startQuizRound();
+  });
+  $("quiz-reset").addEventListener("click", () => {
+    quizPlayers.forEach((player) => { player.score = 0; });
+    saveSettings();
+    renderQuizScoreboard();
+    startQuizRound();
+  });
   $("quiz-show-map").addEventListener("click", () => {
-    if (!currentQuizAirport) return;
+    const airport = quizRoundAirports[quizPlayerIndex];
+    if (!airport) return;
     setPage("map-page");
-    map?.flyTo({ center: [currentQuizAirport.lon, currentQuizAirport.lat], zoom: 10, duration: 1200 });
+    map?.flyTo({ center: [airport.lon, airport.lat], zoom: 10, duration: 1200 });
   });
   $("incidents-refresh").addEventListener("click", loadIncidents);
+  $("incident-sort").addEventListener("change", (event) => {
+    incidentSort = event.target.value;
+    renderIncidentReports();
+  });
   $("statistics-refresh").addEventListener("click", renderStatistics);
   document.querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
     const key = button.dataset.sort;
@@ -1337,7 +1704,6 @@
     $("workspace-button").setAttribute("aria-expanded", "false");
     openSettings();
   });
-  $("clock-settings").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", closeSettings);
   $("settings-scrim").addEventListener("click", closeSettings);
   const settingsMap = { "setting-weather": "weather", "setting-sun": "sun", "setting-labels": "labels", "setting-airports": "airports", "setting-detailed": "detailed" };
@@ -1350,18 +1716,38 @@
       if (key === "detailed" && selectedIcao) openAircraft(selectedIcao);
     });
   }
+  $("setting-radio").addEventListener("change", (event) => {
+    settings.radio = event.target.checked;
+    $("radio-controls").classList.toggle("hidden", !settings.radio);
+    if (!settings.radio) $("radio-stop").click();
+    saveSettings();
+  });
+  $("setting-now-playing").addEventListener("change", (event) => {
+    settings.nowPlaying = event.target.checked;
+    saveSettings();
+    syncNowPlaying();
+  });
   $("setting-standby").addEventListener("change", (event) => setStandby(event.target.checked));
   $("setting-theme").addEventListener("change", (event) => { settings.theme = event.target.value; applyTheme(); saveSettings(); });
+  $("setting-auto-accent").addEventListener("change", (event) => {
+    settings.autoAccent = event.target.checked;
+    applyTheme();
+    saveSettings();
+  });
   installAccentControls();
   installColumnControls();
   $("setting-accent").value = settings.accent;
   document.querySelectorAll("[data-accent]").forEach((button) => button.addEventListener("click", () => {
     settings.accent = button.dataset.accent;
+    settings.autoAccent = false;
+    $("setting-auto-accent").checked = false;
     $("setting-accent").value = settings.accent;
     applyTheme(); saveSettings();
   }));
   $("setting-accent").addEventListener("input", (event) => {
     settings.accent = event.target.value;
+    settings.autoAccent = false;
+    $("setting-auto-accent").checked = false;
     applyTheme(); saveSettings();
   });
   $("setting-clock-format").addEventListener("change", (event) => { settings.clockFormat = event.target.value; saveSettings(); updateClock(); });
@@ -1378,16 +1764,11 @@
       $("workspace-button").setAttribute("aria-expanded", "false");
     }
   });
-  document.querySelectorAll(".aircraft-option").forEach((button) => button.addEventListener("click", () => {
-    document.querySelectorAll(".aircraft-option").forEach((item) => item.classList.remove("selected"));
-    button.classList.add("selected");
-  }));
-
   syncSettingsControls();
   renderColumnMenu();
   renderStatistics();
   renderTable();
-  startAirportQuiz();
+  configureQuizPlayers();
   initializeMap();
   loadRadioStations();
   updateWeather();

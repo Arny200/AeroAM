@@ -28,20 +28,18 @@ Render provides the listening port through `PORT`; no fixed port environment var
 
 - **Map:** MapLibre GL JS vector map styles from OpenFreeMap, with OpenStreetMap attribution. Worldwide airport/aerodrome records and published frequencies come from the public-domain OurAirports dataset, cached by the Express service; overlapping markers are grouped so each airport remains selectable.
 - **Aircraft:** OpenSky Network state vectors for the current map bounds, fetched through the same-origin Express endpoint at `/api/aircraft` and refreshed every 60 seconds. The server coalesces identical requests, caches recent results, returns short-lived stale results when OpenSky is temporarily unavailable, refreshes OAuth2 tokens, and reports upstream rate limits for client-side backoff. The browser does not call OpenSky directly, avoiding the provider's browser CORS restrictions.
-- **Aircraft detail enrichment:** Per-selected-aircraft ADS-B detail via ADS-B.lol, with HexDB fallback when available. Coverage and rate limits vary; not every aircraft has a registry record. The detail panel includes transponder-provided fields and marks absent route/airline values as unavailable.
+- **Aircraft detail enrichment:** Per-selected-aircraft ADS-B detail via ADS-B.lol, with HexDB fallback when available. Coverage and rate limits vary; unavailable fields are omitted. Available position, registry, route, and type data is shared with the detail panel and configurable Traffic Board.
 - **Weather and daylight:** Open-Meteo current conditions, sunrise, and sunset; airport METAR from AviationWeather.gov through the same-origin service.
 - **Locations:** Browser geolocation, coordinate entry, and Nominatim place search through a rate-limited same-origin proxy.
-- **Radio and music:** Secure Irish radio streams from Radio Browser, plus the official Spotify embed for user-provided track, album, playlist, show, or episode links.
+- **Radio and music:** Secure Irish radio streams from Radio Browser, Cork's 96FM official player, and the Spotify embed for user-provided track, album, playlist, show, or episode links. The optional Now Playing pill reflects radio playback and Spotify embed playback events.
 - **Space and flight metrics:** Optional ISS position overlay from Where the ISS at; live speed, altitude, airline-prefix, and ADS-B category summaries; approximate aircraft-type-based cruise CO₂ rate on selected flights.
-- **Incidents and quizzes:** Recent aviation headlines from The Aviation Herald, with source links; airport code and airline scoring quizzes.
+- **Incidents and quizzes:** Recent aviation headlines from The Aviation Herald, sorted by reported occurrence time by default with severity/type/location sorting; single- or multi-player airport quizzes with custom names, optional timers, and score tracking.
 
-Settings, accent colour, and Traffic Board column visibility/order are stored in browser local storage. At startup, AeroAM always opens in Standby Mode.
+Settings, accent colour, quiz preferences, and Traffic Board column visibility/order are stored in browser local storage. The default theme is AMOLED; startup always opens in full-screen Standby Mode. The About page credits Arnold Mathew and notes VS Code, GitHub, and Render.
 
 ## Integrations not included
 
 LiveATC audio and procedure/airport charts need supported, licensed provider data; airport cards link to LiveATC's airport search, and chart UI is omitted. Active arrival/departure runway use and scheduled airport movements are not included in the live position source. Airport cards show published frequencies and only report ground aircraft visible in the current position feed.
-
-AeroAM Flight remains an independent, clearly marked placeholder. A full worldwide terrain simulator needs a dedicated flight-simulation engine, terrain/airport datasets, and aircraft assets; those are not bundled or simulated by the dashboard.
 
 ACARS message decoding is not available from the connected sources, so no ACARS UI is shown. Aircraft photos are displayed only when provided by the selected aircraft's metadata source.
 
