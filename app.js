@@ -1,7 +1,7 @@
 (() => {
   const defaultLocation = { name: "Dublin, Ireland", lat: 53.3498, lon: -6.2603 };
   const storageKey = "aeroam-settings-v1";
-  const defaults = { theme: "dark", accent: "#8da8ff", clockFormat: "24", clockStyle: "modern", weather: true, sun: true, airways: false, labels: true, airports: true, detailed: true, standby: true, location: defaultLocation };
+  const defaults = { theme: "dark", accent: "#8da8ff", clockFormat: "24", clockStyle: "modern", weather: true, sun: true, labels: true, airports: true, iss: false, detailed: true, standby: true, location: defaultLocation };
   const loadSettings = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
@@ -25,6 +25,13 @@
   let airportUpdateTimer;
   let lastAirportRequestAt = 0;
   let airportRequestController;
+  let airportsInView = [];
+  let issMarker;
+  let issTimer;
+  let radioStations = [];
+  let airportQuizScore = 0;
+  let currentQuizAirport;
+  let currentQuizMode = "icao";
   let weatherData = null;
   let sortKey = "callsign";
   let sortAscending = true;
@@ -32,6 +39,23 @@
   const markers = new Map();
   const markerAnimations = new Map();
   const aircraftDetailsCache = new Map();
+  const airlineNames = {
+    ACA: "Air Canada", AFR: "Air France", AAL: "American Airlines", BAW: "British Airways",
+    DAL: "Delta Air Lines", DLH: "Lufthansa", EIN: "Aer Lingus", ETD: "Etihad Airways",
+    EZY: "easyJet", KLM: "KLM", QTR: "Qatar Airways", RYR: "Ryanair", TOM: "TUI Airways",
+    UAE: "Emirates", UAL: "United Airlines", UPS: "UPS"
+  };
+  const aircraftCategories = { 2: "Light", 3: "Small", 4: "Large", 5: "High performance", 6: "Heavy", 7: "High performance", 8: "Rotorcraft", 9: "Glider", 10: "Lighter-than-air", 11: "Skydiver", 12: "Ultralight", 13: "UAV", 14: "Space vehicle", 15: "Emergency vehicle" };
+  const quizAirports = [
+    { name: "Dublin Airport", country: "Ireland", icao: "EIDW", iata: "DUB", airline: "Aer Lingus", lat: 53.4264, lon: -6.2499 },
+    { name: "London Heathrow Airport", country: "United Kingdom", icao: "EGLL", iata: "LHR", airline: "British Airways", lat: 51.47, lon: -0.4543 },
+    { name: "Amsterdam Airport Schiphol", country: "Netherlands", icao: "EHAM", iata: "AMS", airline: "KLM", lat: 52.3086, lon: 4.7639 },
+    { name: "Charles de Gaulle Airport", country: "France", icao: "LFPG", iata: "CDG", airline: "Air France", lat: 49.0097, lon: 2.5479 },
+    { name: "Frankfurt Airport", country: "Germany", icao: "EDDF", iata: "FRA", airline: "Lufthansa", lat: 50.0379, lon: 8.5622 },
+    { name: "John F. Kennedy International Airport", country: "United States", icao: "KJFK", iata: "JFK", airline: "American Airlines", lat: 40.6413, lon: -73.7781 },
+    { name: "Dubai International Airport", country: "United Arab Emirates", icao: "OMDB", iata: "DXB", airline: "Emirates", lat: 25.2532, lon: 55.3657 },
+    { name: "Tokyo Haneda Airport", country: "Japan", icao: "RJTT", iata: "HND", airline: "All Nippon Airways", lat: 35.5494, lon: 139.7798 }
+  ];
   const columnDefinitions = [
     { key: "callsign", label: "Callsign", sortable: true },
     { key: "registration", label: "Registration" },
@@ -123,7 +147,8 @@
     });
     map.on("moveend", scheduleAircraftRefresh);
     map.on("moveend", updateAirports);
-    map.on("load", () => { refreshAircraft(); updateAirports(); });
+    map.on("zoomend", renderAirportMarkers);
+    map.on("load", () => { refreshAircraft(); updateAirports(); if (settings.iss) setISSTracking(true); });
     refreshTimer = setInterval(refreshAircraft, 60000);
   }
 
@@ -173,12 +198,16 @@
         country: row[2] || "", timePosition: row[3], lastContact: row[4],
         lon: row[5], lat: row[6], baroAltitude: row[7], onGround: Boolean(row[8]),
         velocity: row[9], heading: row[10], verticalRate: row[11], squawk: row[14],
+        airlineCode: String(row[1] || "").trim().slice(0, 3).toUpperCase(),
+        aircraftType: aircraftDetailsCache.get(String(row[0]).trim().toUpperCase())?.t || aircraftCategories[row[17]] || "",
         spi: row[15], positionSource: row[16], category: row[17]
       }));
+      updateFlightFilters();
       renderAircraft();
       const showingCached = responses.some((data) => data.stale);
       $("aircraft-count").textContent = `${aircraft.length.toLocaleString()} aircraft in view${showingCached ? " · cached" : ""}`;
       $("board-count").textContent = aircraft.length.toLocaleString();
+      renderStatistics();
       if (showingCached) {
         const delay = Math.max(...responses.map((data) => data.retryAfterSeconds || 0));
         if (delay > 0) deferAircraftRefresh(delay);
@@ -232,7 +261,8 @@
 
   function renderAircraft() {
     if (!map) return;
-    const liveIcaos = new Set(aircraft.map((flight) => flight.icao));
+    const visibleAircraft = getFilteredAircraft();
+    const liveIcaos = new Set(visibleAircraft.map((flight) => flight.icao));
     for (const [icao, marker] of markers) {
       if (!liveIcaos.has(icao)) {
         const frame = markerAnimations.get(icao);
@@ -242,7 +272,7 @@
         markers.delete(icao);
       }
     }
-    for (const flight of aircraft) {
+    for (const flight of visibleAircraft) {
       let marker = markers.get(flight.icao);
       if (!marker) {
         const element = el("button", "plane-marker");
@@ -261,8 +291,8 @@
       marker.getElement().title = flight.callsign;
       marker.getElement().setAttribute("aria-label", `Aircraft ${flight.callsign}`);
     }
-    renderNearby();
-    renderTable();
+    renderNearby(visibleAircraft);
+    renderTable(visibleAircraft);
   }
 
   function animateMarker(marker, targetLat, targetLon, icao) {
@@ -308,8 +338,27 @@
     row.appendChild(cell);
     return row;
   }
-  function renderNearby() {
-    const nearest = [...aircraft].sort((a, b) => distanceKm(a) - distanceKm(b)).slice(0, 3);
+  function getFilteredAircraft() {
+    const airline = $("airline-filter")?.value || "";
+    const type = $("aircraft-type-filter")?.value || "";
+    return aircraft.filter((flight) => (!airline || flight.airlineCode === airline) &&
+      (!type || flight.aircraftType.toUpperCase() === type));
+  }
+  function updateFlightFilters() {
+    const airlineSelect = $("airline-filter");
+    const typeSelect = $("aircraft-type-filter");
+    if (!airlineSelect || !typeSelect) return;
+    const previousAirline = airlineSelect.value;
+    const previousType = typeSelect.value;
+    const airlines = [...new Set(aircraft.map((flight) => flight.airlineCode).filter((code) => airlineNames[code]))].sort();
+    const types = [...new Set(aircraft.map((flight) => flight.aircraftType).filter(Boolean))].sort();
+    airlineSelect.replaceChildren(new Option("All airlines", ""), ...airlines.map((code) => new Option(airlineNames[code], code)));
+    typeSelect.replaceChildren(new Option("All types", ""), ...types.map((model) => new Option(model, model.toUpperCase())));
+    if (airlines.includes(previousAirline)) airlineSelect.value = previousAirline;
+    if (types.some((model) => model.toUpperCase() === previousType)) typeSelect.value = previousType;
+  }
+  function renderNearby(flights = getFilteredAircraft()) {
+    const nearest = [...flights].sort((a, b) => distanceKm(a) - distanceKm(b)).slice(0, 3);
     if (!nearest.length) {
       $("nearby-list").replaceChildren(el("div", "empty-row", "No aircraft in the current map view."));
       return;
@@ -328,7 +377,7 @@
       return row;
     }));
   }
-  function renderTable() {
+  function renderTable(flights = getFilteredAircraft()) {
     const header = $("aircraft-table-head");
     const headerRow = el("tr");
     for (const key of orderedVisibleColumns) {
@@ -350,7 +399,7 @@
     }
     header.replaceChildren(headerRow);
     const query = $("aircraft-search").value.trim().toLowerCase();
-    const sorted = [...aircraft].filter((flight) => `${flight.callsign} ${flight.icao} ${flight.country}`.toLowerCase().includes(query));
+    const sorted = [...flights].filter((flight) => `${flight.callsign} ${flight.icao} ${flight.country} ${flight.airlineCode} ${flight.aircraftType}`.toLowerCase().includes(query));
     sorted.sort((a, b) => {
       const values = {
         callsign: [a.callsign, b.callsign], registration: ["—", "—"], type: ["—", "—"], airline: ["—", "—"],
@@ -385,6 +434,56 @@
       row.append(...orderedVisibleColumns.map((key) => values[key]));
       return row;
     }));
+  }
+
+  function renderStatistics() {
+    const highlights = $("stats-highlights");
+    if (!highlights) return;
+    const airborne = aircraft.filter((flight) => !flight.onGround);
+    const fastest = [...airborne].filter((flight) => Number.isFinite(flight.velocity)).sort((a, b) => b.velocity - a.velocity)[0];
+    const highest = [...airborne].filter((flight) => Number.isFinite(flight.baroAltitude)).sort((a, b) => b.baroAltitude - a.baroAltitude)[0];
+    highlights.replaceChildren(
+      statCard("Fastest live aircraft", fastest ? fastest.callsign : "—", fastest ? speed(fastest) : "No airborne data"),
+      statCard("Highest altitude", highest ? highest.callsign : "—", highest ? altitude(highest) : "No airborne data"),
+      statCard("Airborne now", airborne.length.toLocaleString(), `${aircraft.length.toLocaleString()} aircraft in map view`)
+    );
+
+    const airlineCounts = new Map();
+    const categoryCounts = new Map();
+    for (const flight of airborne) {
+      if (airlineNames[flight.airlineCode]) airlineCounts.set(airlineNames[flight.airlineCode], (airlineCounts.get(airlineNames[flight.airlineCode]) || 0) + 1);
+      const category = flight.aircraftType || aircraftCategories[flight.category] || "Unclassified";
+      categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+    }
+    renderStatBars("stats-airlines", airlineCounts, "Airline prefix unavailable for some aircraft.");
+    renderStatBars("stats-types", categoryCounts, "Aircraft category was not supplied.");
+  }
+  function statCard(label, value, detail) {
+    const card = el("section", "info-card stat-card");
+    card.append(el("span", "eyebrow", label.toUpperCase()), el("strong", "", value), el("small", "", detail));
+    return card;
+  }
+  function renderStatBars(id, counts, emptyMessage) {
+    const container = $(id);
+    if (!container) return;
+    const items = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 7);
+    container.replaceChildren();
+    if (!items.length) {
+      container.append(el("div", "empty-row", emptyMessage));
+      return;
+    }
+    const maximum = items[0][1];
+    for (const [label, count] of items) {
+      const row = el("div", "stats-bar-row");
+      const caption = el("div", "stats-bar-caption");
+      caption.append(el("span", "", label), el("strong", "", String(count)));
+      const track = el("div", "stats-bar-track");
+      const bar = el("span", "stats-bar-fill");
+      bar.style.width = `${Math.max(4, count / maximum * 100)}%`;
+      track.append(bar);
+      row.append(caption, track);
+      container.append(row);
+    }
   }
 
   function openAircraft(icao) {
@@ -427,6 +526,11 @@
     }
     section.append(grid);
     content.append(section);
+    const footprint = el("div", "detail-section carbon-section");
+    footprint.append(el("h3", "", "FLIGHT CARBON ESTIMATE"));
+    footprint.append(el("div", "airport-condition carbon-estimate", carbonEstimate(flight)));
+    footprint.append(el("small", "carbon-note", "Indicative cruise-rate estimate only; not a whole-flight total."));
+    content.append(footprint);
     if (settings.detailed) enrichAircraftDetails(flight, grid);
     $("detail-panel").classList.add("open");
     $("detail-panel").setAttribute("aria-hidden", "false");
@@ -436,6 +540,13 @@
   function setDetailField(grid, label, value) {
     const field = [...grid.querySelectorAll(".detail-field")].find((item) => item.querySelector("span")?.textContent === label);
     if (field && value !== undefined && value !== null && value !== "") field.querySelector("strong").textContent = String(value);
+  }
+  function carbonEstimate(flight, aircraftType = flight.aircraftType) {
+    const type = String(aircraftType || "").toUpperCase();
+    const hourlyKg = /^(B74|B77|B78|A33|A34|A35|A38|A30)/.test(type) ? 20_000
+      : /^(ATR|AT[467]|DH8|DHC|E[12])/.test(type) ? 1_200 : 7_500;
+    const estimateLabel = aircraftType ? "type-based" : "generic jet";
+    return `≈ ${(hourlyKg / 1000).toFixed(1)} tonnes CO₂ per airborne hour (${estimateLabel})`;
   }
   async function enrichAircraftDetails(flight, grid) {
     try {
@@ -470,6 +581,21 @@
         Latitude: Number.isFinite(data.lat) ? `${data.lat.toFixed(5)}°` : undefined,
         Longitude: Number.isFinite(data.lon) ? `${data.lon.toFixed(5)}°` : undefined
       };
+      flight.aircraftType = data.t || flight.aircraftType;
+      updateFlightFilters();
+      const estimate = document.querySelector(".carbon-estimate");
+      if (estimate) estimate.textContent = carbonEstimate(flight, data.t);
+      const photoUrl = [data.image, data.photo, data.photo_url].find((url) => typeof url === "string" && /^https:\/\/[^ ]+$/i.test(url));
+      if (photoUrl && !document.querySelector(".aircraft-photo")) {
+        const image = el("img", "aircraft-photo");
+        image.src = photoUrl;
+        image.alt = `Aircraft photo of ${flight.callsign}`;
+        image.loading = "lazy";
+        image.referrerPolicy = "no-referrer";
+        image.addEventListener("error", () => image.remove(), { once: true });
+        $("detail-content").prepend(image);
+      }
+      renderAircraft();
       for (const [label, value] of Object.entries(fields)) setDetailField(grid, label, value);
       for (const label of ["Registration", "Aircraft type", "Aircraft model", "Operator"]) {
         const field = [...grid.querySelectorAll(".detail-field")].find((item) => item.querySelector("span")?.textContent === label);
@@ -504,6 +630,7 @@
   function updateAirports() {
     clearTimeout(airportUpdateTimer);
     if (!map || !settings.airports) {
+      airportsInView = [];
       airportMarkers.splice(0).forEach((marker) => marker.remove());
       return;
     }
@@ -513,39 +640,124 @@
   async function loadAirports() {
     if (!map || !settings.airports) return;
     const bounds = map.getBounds();
-    if (bounds.getNorth() - bounds.getSouth() > 5 || bounds.getEast() - bounds.getWest() > 8) return;
+    const rawLongitudeSpan = bounds.getEast() - bounds.getWest();
+    const longitudeSpan = rawLongitudeSpan >= 0 ? rawLongitudeSpan : rawLongitudeSpan + 360;
+    if (bounds.getNorth() - bounds.getSouth() > 32 || longitudeSpan > 56) return;
+    const normalizeLongitude = (longitude) => ((longitude + 180) % 360 + 360) % 360 - 180;
+    const west = normalizeLongitude(bounds.getWest());
+    const east = normalizeLongitude(bounds.getEast());
+    const longitudeWidth = west <= east ? east - west : 360 - west + east;
+    if (longitudeWidth > 56) return;
     try {
       if (airportRequestController) airportRequestController.abort();
       airportRequestController = new AbortController();
       lastAirportRequestAt = Date.now();
-      const viewBox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`;
-      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&extratags=1&limit=35&amenity=aerodrome&viewbox=${encodeURIComponent(viewBox)}`;
-      const response = await fetch(url, { signal: airportRequestController.signal });
-      if (!response.ok) throw new Error(`Nominatim returned HTTP ${response.status}`);
-      const places = await response.json();
-      airportMarkers.splice(0).forEach((marker) => marker.remove());
-      for (const place of places) {
-        if (!bounds.contains([Number(place.lon), Number(place.lat)])) continue;
-        const name = place.name || place.display_name.split(",")[0];
-        const element = el("button", "airport-marker");
-        element.type = "button";
-        element.title = name;
-        element.setAttribute("aria-label", `Airport ${name}`);
-        element.innerHTML = '<span class="airport-dot"></span>';
-        const marker = new maplibregl.Marker({ element, anchor: "center" }).setLngLat([Number(place.lon), Number(place.lat)]).addTo(map);
-        airportMarkers.push(marker);
-        element.addEventListener("click", () => openAirport(place, name));
-      }
+      const params = new URLSearchParams({
+        west: west.toFixed(4), south: bounds.getSouth().toFixed(4),
+        east: east.toFixed(4), north: bounds.getNorth().toFixed(4)
+      });
+      const response = await fetch(`/api/airports?${params}`, { signal: airportRequestController.signal });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || `Airport data returned HTTP ${response.status}`);
+      const places = result.airports || [];
+      const seen = new Set();
+      const visiblePlaces = places.filter((place) => {
+        const inLongitudeRange = west <= east ? place.lon >= west && place.lon <= east : place.lon >= west || place.lon <= east;
+        if (place.lat < bounds.getSouth() || place.lat > bounds.getNorth() || !inLongitudeRange) return false;
+        const key = place.icao ? `icao:${place.icao}` : place.iata ? `iata:${place.iata}` : `${place.lat.toFixed(3)},${place.lon.toFixed(3)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      airportsInView = visiblePlaces;
+      renderAirportMarkers();
     } catch (error) {
       if (error.name === "AbortError") return;
       console.error("Unable to refresh airport labels from OpenStreetMap.", error);
     }
   }
+  function renderAirportMarkers() {
+    if (!map || !settings.airports) return;
+    airportMarkers.splice(0).forEach((marker) => marker.remove());
+    const groups = new Map();
+    for (const place of airportsInView) {
+      const point = map.project([place.lon, place.lat]);
+      const key = `${Math.floor(point.x / 42)},${Math.floor(point.y / 42)}`;
+      const group = groups.get(key) || { places: [] };
+      group.places.push(place);
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      const longitude = group.places.reduce((sum, place) => sum + place.lon, 0) / group.places.length;
+      const latitude = group.places.reduce((sum, place) => sum + place.lat, 0) / group.places.length;
+      const element = el("button", group.places.length > 1 ? "airport-marker airport-cluster" : "airport-marker");
+      element.type = "button";
+      element.textContent = group.places.length > 1 ? String(group.places.length) : "";
+      const name = group.places.length > 1 ? `${group.places.length} airports or aerodromes` : group.places[0].name || "Unnamed aerodrome";
+      element.title = name;
+      element.setAttribute("aria-label", name);
+      if (group.places.length === 1) element.innerHTML = '<span class="airport-dot"></span>';
+      const marker = new maplibregl.Marker({ element, anchor: "center" }).setLngLat([longitude, latitude]).addTo(map);
+      airportMarkers.push(marker);
+      element.addEventListener("click", () => {
+        if (group.places.length === 1) openAirport(group.places[0], group.places[0].name || "Unnamed aerodrome");
+        else openAirportCluster(group.places);
+      });
+    }
+  }
+  function openAirportCluster(places) {
+    $("detail-kicker").textContent = "AIRPORTS & AERODROMES";
+    $("detail-title").textContent = `${places.length} nearby`;
+    const content = $("detail-content");
+    content.replaceChildren();
+    const list = el("div", "airport-cluster-list");
+    for (const place of places) {
+      const button = el("button", "airport-cluster-item");
+      button.type = "button";
+      button.append(el("strong", "", place.name || "Unnamed aerodrome"), el("span", "", [place.icao, place.iata, place.type].filter(Boolean).join(" · ")));
+      button.addEventListener("click", () => openAirport(place, place.name || "Unnamed aerodrome"));
+      list.append(button);
+    }
+    content.append(list);
+    $("detail-panel").classList.add("open");
+    $("detail-panel").setAttribute("aria-hidden", "false");
+    $("panel-scrim").classList.remove("hidden");
+  }
+  async function updateISS() {
+    if (!map || !issMarker) return;
+    try {
+      const response = await fetch("/api/iss");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || `ISS tracker returned HTTP ${response.status}`);
+      issMarker.setLngLat([data.longitude, data.latitude]);
+      $("iss-button").title = `ISS · ${Math.round(data.altitude)} km altitude`;
+    } catch (error) {
+      console.error("Unable to update ISS position.", error);
+    }
+  }
+  function setISSTracking(enabled) {
+    $("iss-button").setAttribute("aria-pressed", String(enabled));
+    if (!map) return;
+    clearInterval(issTimer);
+    if (!enabled) {
+      issMarker?.remove();
+      issMarker = undefined;
+      return;
+    }
+    if (!issMarker) {
+      const markerElement = el("button", "iss-marker", "ISS");
+      markerElement.type = "button";
+      markerElement.setAttribute("aria-label", "International Space Station position");
+      markerElement.title = "International Space Station";
+      issMarker = new maplibregl.Marker({ element: markerElement, anchor: "center" }).setLngLat([0, 0]).addTo(map);
+    }
+    updateISS();
+    issTimer = setInterval(updateISS, 10_000);
+  }
   function openAirport(place, name) {
-    const address = place.address || {};
-    const icao = address.icao || place.extratags?.icao || "";
-    const iata = address.iata || place.extratags?.iata || "";
-    const elevation = place.extratags?.ele ? `${place.extratags.ele} m` : "Not listed";
+    const icao = place.icao || "";
+    const iata = place.iata || "";
+    const elevation = Number.isFinite(place.elevationFt) ? `${Math.round(place.elevationFt).toLocaleString()} ft` : "Not listed";
     $("detail-kicker").textContent = "AIRPORT INFORMATION";
     $("detail-title").textContent = name;
     const content = $("detail-content");
@@ -553,7 +765,13 @@
     const section = el("div", "detail-section");
     section.append(el("h3", "", "AIRPORT DATA"));
     const grid = el("div", "detail-grid");
-    for (const [label, value] of [["Airport", name], ["ICAO", icao || "Looking up…"], ["IATA", iata || "Looking up…"], ["Elevation", elevation], ["Latitude", `${Number(place.lat).toFixed(5)}°`], ["Longitude", `${Number(place.lon).toFixed(5)}°`]]) {
+    const airportFields = [
+      ["Airport", name], ["ICAO", icao || "Not listed"], ["IATA", iata || "Not listed"],
+      ["Facility type", place.type || "Not listed"], ["Elevation", elevation],
+      ["Location", [place.municipality, place.country].filter(Boolean).join(", ") || "Not listed"],
+      ["Latitude", `${Number(place.lat).toFixed(5)}°`], ["Longitude", `${Number(place.lon).toFixed(5)}°`]
+    ];
+    for (const [label, value] of airportFields) {
       const field = el("div", "detail-field");
       field.append(el("span", "", label), el("strong", "", value));
       if (label === "ICAO" || label === "IATA" || label === "Elevation") field.dataset.airportField = label.toLowerCase();
@@ -566,23 +784,64 @@
     notice.append(el("div", "airport-condition", "Looking up airport weather…"));
     content.append(notice);
     if (icao) loadAirportMetar(icao, notice.querySelector(".airport-condition"));
-    else notice.querySelector(".airport-condition").textContent = "This OpenStreetMap record has no ICAO code for METAR lookup.";
+    else notice.querySelector(".airport-condition").textContent = "This airport record has no ICAO code for METAR lookup.";
     const traffic = el("div", "detail-section");
     traffic.append(el("h3", "", "AIRPORT TRAFFIC"));
     const grounded = aircraft.filter((flight) => flight.onGround && Math.hypot(flight.lat - Number(place.lat), (flight.lon - Number(place.lon)) * Math.cos(Number(place.lat) * Math.PI / 180)) < .07).length;
     traffic.append(el("div", "airport-condition", `Ground aircraft visible in this feed: ${grounded}. Arrivals and departures are not supplied by the live position source.`));
     content.append(traffic);
-    const charts = el("div", "detail-section");
-    charts.append(el("h3", "", "CHARTS & ATC"));
-    charts.append(el("div", "airport-condition", "Procedure charts and ATC audio require licensed provider coverage and are not available in this build."));
-    content.append(charts);
+    const tags = place.tags || place.extratags || {};
+    const frequencies = place.frequencies?.length
+      ? place.frequencies.map((frequency) => [`${frequency.type} frequency`, `${frequency.description} · ${frequency.frequency}`])
+      : Object.entries(tags).filter(([key, value]) => /freq/i.test(key) && String(value).trim());
+    if (frequencies.length) {
+      const frequencySection = el("div", "detail-section");
+      frequencySection.append(el("h3", "", "AIRPORT FREQUENCIES"));
+      const frequencyGrid = el("div", "detail-grid");
+      for (const [key, value] of frequencies) {
+        const label = key.replace(/^(communication:|aeroway:)/i, "").replace(/frequency|freq/gi, "").replace(/[:_]+/g, " ").trim() || "Radio";
+        const field = el("div", "detail-field");
+        field.append(el("span", "", label.replace(/\b\w/g, (letter) => letter.toUpperCase())), el("strong", "", String(value)));
+        frequencyGrid.append(field);
+      }
+      frequencySection.append(frequencyGrid);
+      content.append(frequencySection);
+    }
+    const runways = [
+      ["Active runway", tags.active_runway || tags["runway:active"]],
+      ["Arrival runway", tags.arrival_runway || tags["runway:arrival"]],
+      ["Departure runway", tags.departure_runway || tags["runway:departure"]]
+    ].filter(([, value]) => value);
+    if (runways.length) {
+      const runwaySection = el("div", "detail-section");
+      runwaySection.append(el("h3", "", "ACTIVE RUNWAYS"));
+      const runwayGrid = el("div", "detail-grid");
+      for (const [label, value] of runways) {
+        const field = el("div", "detail-field");
+        field.append(el("span", "", label), el("strong", "", String(value)));
+        runwayGrid.append(field);
+      }
+      runwaySection.append(runwayGrid);
+      content.append(runwaySection);
+    }
+    const atc = el("div", "detail-section");
+    atc.append(el("h3", "", "LIVE ATC"));
+    atc.append(el("div", "airport-condition", icao ? "Open LiveATC in a new tab to check feed availability for this airport." : "A published ICAO code is required to search LiveATC."));
+    if (icao) {
+      const link = el("a", "external-feed-link", "Search LiveATC feeds ↗");
+      link.href = `https://www.liveatc.net/search/?icao=${encodeURIComponent(icao)}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      atc.append(link);
+    }
+    content.append(atc);
     $("detail-panel").classList.add("open");
     $("detail-panel").setAttribute("aria-hidden", "false");
     $("panel-scrim").classList.remove("hidden");
   }
   async function loadAirportMetar(icao, target) {
     try {
-      const response = await fetch(`https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=json`);
+      const response = await fetch(`/api/metar?ids=${encodeURIComponent(icao)}`);
       if (!response.ok) throw new Error(`METAR service returned HTTP ${response.status}`);
       const [metar] = await response.json();
       if (!metar) {
@@ -636,6 +895,109 @@
     return { label: "Conditions unavailable", icon: "☁" };
   }
 
+  async function loadRadioStations() {
+    const select = $("radio-station");
+    try {
+      const response = await fetch("/api/radio");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || `Radio directory returned HTTP ${response.status}`);
+      radioStations = data.stations || [];
+      select.replaceChildren(new Option(radioStations.length ? "Choose an Irish station…" : "No secure streams available", ""));
+      for (const [index, station] of radioStations.entries()) select.append(new Option(station.name, String(index)));
+    } catch (error) {
+      console.error("Unable to load radio stations.", error);
+      select.replaceChildren(new Option("Radio directory unavailable", ""));
+    }
+  }
+  function loadSpotifyEmbed() {
+    const input = $("spotify-link");
+    const match = input.value.trim().match(/^https:\/\/open\.spotify\.com\/(track|album|playlist|show|episode)\/([A-Za-z0-9]+)(?:[?#].*)?$/i);
+    if (!match) {
+      showMessage("Paste a Spotify track, album, playlist, show or episode link.");
+      return;
+    }
+    const frame = document.createElement("iframe");
+    frame.title = "Spotify player";
+    frame.loading = "lazy";
+    frame.allow = "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture";
+    frame.src = `https://open.spotify.com/embed/${match[1].toLowerCase()}/${match[2]}`;
+    $("spotify-embed").replaceChildren(frame);
+    $("spotify-embed").classList.remove("hidden");
+  }
+  async function loadIncidents() {
+    const list = $("incident-list");
+    list.replaceChildren(el("div", "empty-row", "Loading recent aviation reports…"));
+    try {
+      const response = await fetch("/api/incidents");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || `Incident feed returned HTTP ${response.status}`);
+      if (!data.incidents?.length) throw new Error("No recent incident reports were returned.");
+      list.replaceChildren(...data.incidents.map((incident) => {
+        const card = el("article", "incident-card info-card");
+        if (incident.image) {
+          const image = el("img", "incident-image");
+          image.src = incident.image;
+          image.alt = "";
+          image.loading = "lazy";
+          image.referrerPolicy = "no-referrer";
+          image.addEventListener("error", () => image.remove(), { once: true });
+          card.append(image);
+        }
+        card.append(el("span", "eyebrow", incident.date || "AVIATION REPORT"), el("h3", "", incident.title));
+        if (incident.aircraftType || incident.location) {
+          const details = el("div", "incident-details");
+          if (incident.aircraftType) details.append(el("span", "", incident.aircraftType));
+          if (incident.location) details.append(el("span", "", incident.location));
+          card.append(details);
+        }
+        card.append(el("p", "", incident.summary || "Open the source for report details."));
+        const link = el("a", "external-feed-link", "Read report ↗");
+        link.href = incident.link;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        card.append(link);
+        return card;
+      }));
+    } catch (error) {
+      console.error("Unable to load aviation incidents.", error);
+      const retry = el("div", "empty-row", "The external incident feed is temporarily unavailable.");
+      list.replaceChildren(retry);
+    }
+  }
+  function startAirportQuiz() {
+    currentQuizMode = $("quiz-mode").value;
+    currentQuizAirport = quizAirports[Math.floor(Math.random() * quizAirports.length)];
+    $("quiz-region").textContent = currentQuizAirport.country.toUpperCase();
+    $("quiz-airport-name").textContent = currentQuizAirport.name;
+    $("quiz-airport-clue").textContent = currentQuizMode === "airline"
+      ? `Which airline is most closely associated with ${currentQuizAirport.iata}?`
+      : `Identify the ${currentQuizMode.toUpperCase()} code for this airport.`;
+    $("quiz-feedback").textContent = "";
+    $("quiz-options").replaceChildren();
+    $("quiz-next").classList.add("hidden");
+    const property = currentQuizMode;
+    const correct = currentQuizAirport[property];
+    const distractors = [...new Set(quizAirports.map((airport) => airport[property]).filter((answer) => answer !== correct))];
+    const choices = [correct, ...distractors.sort(() => Math.random() - 0.5).slice(0, 3)].sort(() => Math.random() - 0.5);
+    for (const answer of choices) {
+      const button = el("button", "quiz-choice", answer);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        const right = answer === correct;
+        if (right) {
+          airportQuizScore += 1;
+          $("quiz-score").textContent = String(airportQuizScore);
+        }
+        $("quiz-feedback").textContent = right ? "Correct — +1 point." : `Not quite — the answer is ${correct}.`;
+        $("quiz-feedback").classList.toggle("correct", right);
+        $("quiz-feedback").classList.toggle("incorrect", !right);
+        $("quiz-options").querySelectorAll("button").forEach((choice) => { choice.disabled = true; });
+        $("quiz-next").classList.remove("hidden");
+      });
+      $("quiz-options").append(button);
+    }
+  }
+
   async function searchLocation(query) {
     const trimmed = query.trim();
     if (!trimmed) return;
@@ -653,8 +1015,8 @@
     resultBox.replaceChildren(el("button", "", "Searching locations…"));
     resultBox.classList.remove("hidden");
     try {
-      const params = new URLSearchParams({ q: trimmed, format: "jsonv2", addressdetails: "1", limit: "5", extratags: "1" });
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
+      const params = new URLSearchParams({ q: trimmed });
+      const response = await fetch(`/api/geocode?${params}`);
       if (!response.ok) throw new Error(`Location search returned HTTP ${response.status}`);
       const results = await response.json();
       resultBox.replaceChildren();
@@ -726,6 +1088,7 @@
     $("standby-clock").textContent = time;
     $("standby-date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
     $("standby-clock").className = `standby-time ${settings.clockStyle}`;
+    $("mini-clock").className = `mini-clock ${settings.clockStyle}`;
     $("weather-toggle").classList.toggle("active", settings.weather);
     $("sunrise").parentElement.parentElement.classList.toggle("hidden", !settings.sun);
     document.querySelector(".weather-main").classList.toggle("hidden", !settings.weather);
@@ -733,10 +1096,15 @@
     $("standby-weather").classList.toggle("hidden", !settings.weather || !weatherData);
   }
   function applyTheme() {
+    const themes = ["dark", "light", "amoled", "liquid", "christmas", "retro"];
+    if (!themes.includes(settings.theme)) settings.theme = "dark";
     document.body.classList.toggle("light-theme", settings.theme === "light");
+    document.body.classList.remove(...themes.map((theme) => `theme-${theme}`));
+    document.body.classList.add(`theme-${settings.theme}`);
     $("setting-theme").value = settings.theme;
     document.documentElement.style.setProperty("--accent", settings.accent);
-    if (map) map.setStyle(settings.theme === "dark" ? "https://tiles.openfreemap.org/styles/dark" : "https://tiles.openfreemap.org/styles/bright");
+    document.querySelectorAll("[data-accent]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.accent === settings.accent)));
+    if (map) map.setStyle(settings.theme === "light" ? "https://tiles.openfreemap.org/styles/bright" : "https://tiles.openfreemap.org/styles/dark");
   }
   function installAccentControls() {
     const themeRow = $("setting-theme").closest(".select-row");
@@ -773,15 +1141,14 @@
     tableWrap.before(tools);
   }
   function syncSettingsControls() {
-    for (const key of ["weather", "sun", "airways", "labels", "airports", "detailed", "standby"]) {
+    for (const key of ["weather", "sun", "labels", "airports", "detailed", "standby"]) {
       $(`setting-${key}`).checked = settings[key];
     }
     $("setting-clock-format").value = settings.clockFormat;
     $("setting-clock-style").value = settings.clockStyle;
-    $("setting-airways").checked = settings.airways;
-    $("airway-button").setAttribute("aria-pressed", String(settings.airways));
     $("labels-button").setAttribute("aria-pressed", String(settings.labels));
     $("airports-button").setAttribute("aria-pressed", String(settings.airports));
+    $("iss-button").setAttribute("aria-pressed", String(settings.iss));
     applyTheme();
     setLocationLabel();
     setStandby(settings.standby);
@@ -856,13 +1223,22 @@
   function setPage(pageId) {
     document.querySelectorAll(".page-view").forEach((page) => page.classList.toggle("active", page.id === pageId));
     document.querySelectorAll(".workspace-menu [data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === pageId));
-    const labels = { "map-page": ["THE WORLD ABOVE YOU", "Live map"], "traffic-page": ["LIVE · YOUR AIRSPACE", "Traffic board"], "flight-page": ["A SEPARATE FLIGHT EXPERIENCE", "AeroAM Flight"] };
+    const labels = {
+      "map-page": ["THE WORLD ABOVE YOU", "Live map"],
+      "traffic-page": ["LIVE · YOUR AIRSPACE", "Traffic board"],
+      "flight-page": ["A SEPARATE FLIGHT EXPERIENCE", "AeroAM Flight"],
+      "games-page": ["AIRPORT KNOWLEDGE", "Airport quiz"],
+      "incidents-page": ["EXTERNAL AVIATION NEWS", "Incident feed"],
+      "statistics-page": ["CURRENT MAP VIEW", "Live statistics"]
+    };
     $("page-eyebrow").textContent = labels[pageId][0];
     $("page-title").textContent = labels[pageId][1];
     $("workspace-menu").classList.add("hidden");
     $("workspace-button").setAttribute("aria-expanded", "false");
     setStandby(false);
     if (pageId === "map-page" && map) setTimeout(() => map.resize(), 50);
+    if (pageId === "statistics-page") renderStatistics();
+    if (pageId === "incidents-page") loadIncidents();
   }
 
   $("search-submit").addEventListener("click", () => { clearTimeout(searchTimer); searchLocation($("location-search").value); });
@@ -882,12 +1258,10 @@
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setStandby(false); closeSettings(); closeDetails(); } });
   $("zoom-in").addEventListener("click", () => map?.zoomIn());
   $("zoom-out").addEventListener("click", () => map?.zoomOut());
-  $("airway-button").addEventListener("click", () => {
-    settings.airways = !settings.airways;
-    $("setting-airways").checked = settings.airways;
-    $("airway-button").setAttribute("aria-pressed", String(settings.airways));
+  $("iss-button").addEventListener("click", () => {
+    settings.iss = !settings.iss;
     saveSettings();
-    showMessage(settings.airways ? "Airway overlay data is not connected yet." : "Airway overlay hidden.");
+    setISSTracking(settings.iss);
   });
   $("labels-button").addEventListener("click", () => {
     settings.labels = !settings.labels;
@@ -910,6 +1284,42 @@
   document.querySelectorAll("[data-go]").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.go)));
   $("aircraft-search").addEventListener("input", renderTable);
   $("board-refresh").addEventListener("click", refreshAircraft);
+  $("airline-filter").addEventListener("change", renderAircraft);
+  $("aircraft-type-filter").addEventListener("change", renderAircraft);
+  $("radio-station").addEventListener("change", async (event) => {
+    const station = radioStations[Number(event.target.value)];
+    const player = $("radio-player");
+    if (!station) {
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+      return;
+    }
+    player.src = station.url;
+    try {
+      await player.play();
+    } catch (error) {
+      console.error("Radio playback could not start.", error);
+      showMessage("This station could not start playback. Try another stream.");
+    }
+  });
+  $("radio-stop").addEventListener("click", () => {
+    $("radio-player").pause();
+    $("radio-player").removeAttribute("src");
+    $("radio-player").load();
+    $("radio-station").value = "";
+  });
+  $("spotify-load").addEventListener("click", loadSpotifyEmbed);
+  $("spotify-link").addEventListener("keydown", (event) => { if (event.key === "Enter") loadSpotifyEmbed(); });
+  $("quiz-mode").addEventListener("change", startAirportQuiz);
+  $("quiz-next").addEventListener("click", startAirportQuiz);
+  $("quiz-show-map").addEventListener("click", () => {
+    if (!currentQuizAirport) return;
+    setPage("map-page");
+    map?.flyTo({ center: [currentQuizAirport.lon, currentQuizAirport.lat], zoom: 10, duration: 1200 });
+  });
+  $("incidents-refresh").addEventListener("click", loadIncidents);
+  $("statistics-refresh").addEventListener("click", renderStatistics);
   document.querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
     const key = button.dataset.sort;
     sortAscending = sortKey === key ? !sortAscending : true;
@@ -930,7 +1340,7 @@
   $("clock-settings").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", closeSettings);
   $("settings-scrim").addEventListener("click", closeSettings);
-  const settingsMap = { "setting-weather": "weather", "setting-sun": "sun", "setting-airways": "airways", "setting-labels": "labels", "setting-airports": "airports", "setting-detailed": "detailed" };
+  const settingsMap = { "setting-weather": "weather", "setting-sun": "sun", "setting-labels": "labels", "setting-airports": "airports", "setting-detailed": "detailed" };
   for (const [id, key] of Object.entries(settingsMap)) {
     $(id).addEventListener("change", (event) => {
       settings[key] = event.target.checked;
@@ -975,8 +1385,11 @@
 
   syncSettingsControls();
   renderColumnMenu();
+  renderStatistics();
   renderTable();
+  startAirportQuiz();
   initializeMap();
+  loadRadioStations();
   updateWeather();
   updateClock();
   setInterval(updateClock, 1000);
