@@ -90,6 +90,80 @@ app.get("/api/airports", async (request, response) => {
   }
 });
 
+app.get("/api/airport-search", async (request, response) => {
+  const query = String(request.query.q || "").trim().slice(0, 100);
+  if (query.length < 2) return apiError(response, 400, "invalid_query", "Enter at least two characters to search airports.");
+  try {
+    const dataset = await getAirportDataset();
+    const normalized = query.toLowerCase();
+    const matches = dataset.airports.filter((airport) =>
+      [airport.name, airport.icao, airport.iata, airport.municipality, airport.country]
+        .some((value) => String(value || "").toLowerCase().includes(normalized))
+    ).sort((a, b) => {
+      const aExact = [a.icao, a.iata].some((value) => String(value || "").toLowerCase() === normalized);
+      const bExact = [b.icao, b.iata].some((value) => String(value || "").toLowerCase() === normalized);
+      return Number(bExact) - Number(aExact) || a.name.localeCompare(b.name);
+    }).slice(0, 20);
+    response.setHeader("Cache-Control", "public, max-age=300");
+    return response.json({ airports: matches });
+  } catch (error) {
+    console.error("Airport search failed:", error.message);
+    return apiError(response, 502, "airport_data_unavailable", "Airport search is temporarily unavailable.");
+  }
+});
+
+app.get("/api/nearest-airport", async (request, response) => {
+  const lat = Number(request.query.lat);
+  const lon = Number(request.query.lon);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+    return apiError(response, 400, "invalid_coordinates", "Provide valid airport search coordinates.");
+  }
+  try {
+    const dataset = await getAirportDataset();
+    const distance = (airport) => {
+      const radians = (value) => value * Math.PI / 180;
+      const dLat = radians(airport.lat - lat), dLon = radians(airport.lon - lon);
+      const arc = Math.sin(dLat / 2) ** 2 + Math.cos(radians(lat)) * Math.cos(radians(airport.lat)) * Math.sin(dLon / 2) ** 2;
+      return 6371 * 2 * Math.atan2(Math.sqrt(arc), Math.sqrt(1 - arc));
+    };
+    const nearest = dataset.airports.filter((airport) => airport.icao || airport.iata)
+      .map((airport) => ({ airport, distanceKm: distance(airport) }))
+      .sort((a, b) => a.distanceKm - b.distanceKm)[0];
+    if (!nearest) return apiError(response, 404, "airport_not_found", "No coded airports were found.");
+    response.setHeader("Cache-Control", "public, max-age=300");
+    return response.json({ ...nearest.airport, distanceKm: nearest.distanceKm });
+  } catch (error) {
+    console.error("Nearest airport lookup failed:", error.message);
+    return apiError(response, 502, "airport_data_unavailable", "Nearest airport lookup is temporarily unavailable.");
+  }
+});
+
+app.get("/api/quiz-airports", async (request, response) => {
+  const difficulty = String(request.query.difficulty || "medium");
+  if (!["easy", "medium", "hard", "extreme"].includes(difficulty)) {
+    return apiError(response, 400, "invalid_difficulty", "Choose a supported airport quiz difficulty.");
+  }
+  try {
+    const dataset = await getAirportDataset();
+    const airports = dataset.airports.filter((airport) => {
+      if (!airport.icao || !airport.iata) return false;
+      if (difficulty === "easy") return airport.type === "large airport";
+      if (difficulty === "medium") return ["large airport", "medium airport"].includes(airport.type);
+      if (difficulty === "hard") return ["large airport", "medium airport", "small airport"].includes(airport.type);
+      return ["small airport", "heliport", "seaplane base", "balloonport"].includes(airport.type);
+    }).slice(0, 4000).map((airport) => ({
+      name: airport.name, country: airport.country, icao: airport.icao, iata: airport.iata,
+      lat: airport.lat, lon: airport.lon, difficulty: airport.type === "large airport" ? "major"
+        : airport.type === "medium airport" ? "common" : "obscure"
+    }));
+    response.setHeader("Cache-Control", "public, max-age=3600");
+    return response.json({ airports });
+  } catch (error) {
+    console.error("Airport quiz dataset lookup failed:", error.message);
+    return apiError(response, 502, "airport_data_unavailable", "Airport quiz data is temporarily unavailable.");
+  }
+});
+
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -559,6 +633,12 @@ app.get(["/", "/index.html"], (_request, response, next) => {
     if (error) next(error);
   });
 });
+app.get("/cast", (_request, response, next) => {
+  response.setHeader("Cache-Control", "no-cache");
+  response.sendFile("cast.html", { root: publicDirectory }, (error) => {
+    if (error) next(error);
+  });
+});
 app.get("/app.js", (_request, response, next) => {
   response.setHeader("Cache-Control", "no-store");
   response.sendFile("app.js", { root: publicDirectory }, (error) => {
@@ -567,6 +647,11 @@ app.get("/app.js", (_request, response, next) => {
 });
 app.get("/styles.css", (_request, response, next) => {
   response.sendFile("styles.css", { root: publicDirectory }, (error) => {
+    if (error) next(error);
+  });
+});
+app.get("/favicon.svg", (_request, response, next) => {
+  response.sendFile("favicon.svg", { root: publicDirectory }, (error) => {
     if (error) next(error);
   });
 });

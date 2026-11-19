@@ -239,7 +239,7 @@ select option{background:#171c25;color:#e8ebf0}
 .incident-details{display:flex;flex-wrap:wrap;gap:6px}
 .incident-details span{padding:4px 7px;border-radius:20px;background:var(--panel-2);color:var(--accent);font:9px var(--mono)}
 .incident-image{width:100%;max-height:180px;object-fit:cover;border-radius:8px;margin-bottom:12px}
-.stats-highlights{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.stats-highlights{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .stat-card{display:grid;gap:9px;min-height:125px}
 .stat-card>strong{font:700 26px Manrope,sans-serif;color:var(--accent)}
 .stat-card>small{font-size:10px;color:var(--muted)}
@@ -369,4 +369,154 @@ select option{background:#171c25;color:#e8ebf0}
 }
 @media(max-width:1050px){
   .clock-card{display:block;grid-column:1/-1}
+}
+
+/* Focus, reference, travel log, tools and mobile sky view */
+:root{--accent-soft:color-mix(in srgb,var(--accent),transparent 90%)}
+button,select,input{transition:background-color .2s ease,border-color .2s ease,color .2s ease,transform .2s cubic-bezier(.2,.8,.2,1),opacity .2s ease}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid color-mix(in srgb,var(--accent),transparent 20%);outline-offset:2px}
+select,.quiz-mode select,.tool-card select,.tool-card input:not([type=file]),.focus-settings input,.flight-log-fields input,.library-tools input{min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background-color:var(--panel-2);color:var(--text);font-size:12px}
+select{color-scheme:dark}
+.light-theme select,.light-theme input{color-scheme:light}
+.theme-amoled{--bg:#000;--panel:#08090b;--panel-2:#101114;--line:#23252a;--text:#f4f5f7;--muted:#a0a5ae;color:var(--text)}
+.theme-amoled .topbar{border-color:#17191c}
+.theme-amoled .info-card,.theme-amoled .settings-drawer,.theme-amoled .detail-panel,.theme-amoled .workspace-menu{border-color:#1b1d21;background:#08090b}
+.theme-amoled .plane-marker{color:#fff;text-shadow:0 1px 5px #000,0 0 7px #ffffff55}
+.theme-amoled .plane-marker.near-user,.theme-amoled .plane-marker.selected{color:#fff;text-shadow:0 0 9px #fff,0 0 18px #ffffff66}
+.theme-amoled .logo-plane{color:#fff;fill:#fff}
+.theme-amoled .setting-row input[type=checkbox]{background:#191b20;border-color:#32353b;box-shadow:none}
+.theme-amoled .setting-row input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent);box-shadow:none}
+.theme-amoled .setting-row input[type=checkbox]::after{box-shadow:none}
+.setting-row input[type=checkbox]{box-shadow:none!important;transition:background-color .2s ease,border-color .2s ease}
+.setting-row input[type=checkbox]::before{content:none!important}
+.setting-row input[type=checkbox]::after{box-shadow:none!important;transition:transform .22s cubic-bezier(.2,.8,.2,1),background-color .2s ease}
+.setting-row input[type=checkbox]:checked{box-shadow:none!important}
+.setting-row input[type=checkbox]:checked::after{background:#fff}
+.standby-center{position:relative;isolation:isolate}
+.standby-time,.standby-date,.standby-rotation{position:relative;z-index:1}
+.mini-visualizer{display:flex;align-items:center;justify-content:center;gap:3px}
+.standby-visualizer{position:absolute;z-index:0;inset:20% -16% 28%;height:65%;opacity:.14;pointer-events:none;mask-image:radial-gradient(ellipse,#000 20%,transparent 75%)}
+.visualizer-bar{display:block;width:3px;height:20%;border-radius:5px;background:var(--visualizer-colour,var(--accent));transform-origin:center;animation:visualizer-drift 1.15s ease-in-out infinite alternate;animation-delay:calc(var(--bar-index)*-37ms)}
+.radio-visualizer{height:28px;display:flex;align-items:center;justify-content:center;gap:3px;overflow:hidden;border-radius:8px;background:var(--panel-2)}
+.radio-visualizer .visualizer-bar{height:18%;animation-duration:.78s}
+.radio-player-row{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:12px}
+.visualizer-wave .visualizer-bar{height:10%;animation-name:visualizer-wave}
+.visualizer-pulse .visualizer-bar{height:5%;animation-name:visualizer-pulse}
+.standby-visualizer .visualizer-bar{width:5px}
+@keyframes visualizer-drift{from{transform:scaleY(.25);opacity:.5}to{transform:scaleY(1.7);opacity:1}}
+@keyframes visualizer-wave{from{transform:translateY(-5px) scaleY(.5)}to{transform:translateY(5px) scaleY(1.5)}}
+@keyframes visualizer-pulse{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1.8)}}
+.standby-rotation>.standby-weather,.standby-rotation>.standby-now-playing{transition:opacity 1.1s ease,transform 1.1s cubic-bezier(.22,1,.36,1)}
+.standby-now-playing,.now-playing-pill{max-width:min(86vw,440px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-view.active{animation:page-enter .24s ease-out}
+.workspace-menu button,.toolbar-button,.primary-button,.map-action,.text-button{transition:background-color .2s ease,border-color .2s ease,color .2s ease,transform .2s cubic-bezier(.2,.8,.2,1),opacity .2s ease}
+.workspace-menu button:hover,.toolbar-button:hover,.primary-button:hover,.map-action:hover,.text-button:hover{transform:translateY(-1px)}
+.workspace-menu button:active,.toolbar-button:active,.primary-button:active,.map-action:active{transform:scale(.97)}
+.workspace-menu .ar-menu-item.hidden{display:none!important}
+.workspace-button svg,.map-action svg{width:17px;height:17px;fill:currentColor}
+.focus-card{max-width:680px;margin:34px auto;padding:clamp(22px,6vw,52px);text-align:center}
+.focus-mode{display:flex;justify-content:center;gap:7px;padding:5px;border:1px solid var(--line);border-radius:999px;background:var(--panel-2);width:max-content;margin:auto}
+.focus-mode-button{min-width:100px;padding:9px 16px;border:0;border-radius:999px;background:transparent;color:var(--muted);font-size:12px}
+.focus-mode-button.active{background:var(--accent-soft);color:var(--accent)}
+.focus-clock{margin:28px 0 6px;font:300 clamp(70px,13vw,116px) Manrope,sans-serif;letter-spacing:-.08em;font-variant-numeric:tabular-nums}
+.focus-session{color:var(--muted);font-size:12px}
+.focus-controls{display:flex;justify-content:center;gap:9px;margin:26px 0 32px}
+.focus-controls button{min-width:110px;justify-content:center}
+.focus-settings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:9px;align-items:end;text-align:left;border-top:1px solid var(--line);padding-top:22px}
+.focus-settings label,.tool-card label,.flight-log-fields label{display:grid;gap:7px;color:var(--muted);font-size:10px}
+.focus-settings input{width:100%;text-align:center}
+.focus-save{white-space:nowrap}
+.library-tools{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:0 0 15px}
+.library-tools input{width:min(520px,100%)}
+.library-tools>span{font:10px var(--mono);color:var(--muted)}
+.aircraft-library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr));gap:12px}
+.aircraft-library-card{min-height:0;padding:19px}
+.library-card-heading{display:flex;align-items:center;justify-content:space-between}
+.library-type{font:600 11px var(--mono);color:var(--accent)}
+.library-manufacturer{font-size:10px;color:var(--muted)}
+.aircraft-library-card h3{margin:9px 0 17px;font:600 18px Manrope,sans-serif}
+.library-specs{display:grid;grid-template-columns:1fr 1fr;gap:13px 15px}
+.library-spec{display:grid;gap:4px;min-width:0}
+.library-spec span{font-size:9px;color:var(--muted)}
+.library-spec strong{font-size:10px;line-height:1.45;overflow-wrap:anywhere;font-weight:500}
+.library-spec:last-child{grid-column:1/-1}
+.flight-log-form{min-height:0;margin:-7px 0 17px}
+.flight-log-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.flight-log-fields input{width:100%;min-width:0}
+.flight-log-fields .log-notes{grid-column:1/-1}
+.flight-log-actions{display:flex;gap:8px;margin-top:16px}
+.log-periods{display:flex;flex-wrap:wrap;gap:6px;margin:15px 0}
+.log-periods button{padding:8px 13px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--muted);font-size:10px}
+.log-periods button.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.flight-log-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:11px}
+.flight-log-entry{min-height:0;padding:16px}
+.flight-log-entry-heading{display:flex;justify-content:space-between;align-items:center;gap:7px}
+.flight-log-entry-controls{display:flex;gap:10px}
+.flight-log-entry h3{margin:15px 0 5px;font:600 15px Manrope,sans-serif}
+.flight-log-entry p{margin:5px 0;color:var(--muted);font-size:10px;line-height:1.5}
+.flight-log-entry .log-route{font:12px var(--mono);color:var(--accent)}
+.recent-tracked{margin-top:20px;min-height:0}
+.recent-tracked h2{margin:5px 0;font:600 14px Manrope,sans-serif}
+.recent-aircraft-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;margin-top:12px}
+.recent-aircraft-item{display:grid;gap:5px;text-align:left;padding:11px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);color:var(--text)}
+.recent-aircraft-item strong{font:11px var(--mono)}
+.recent-aircraft-item span{font-size:9px;color:var(--muted);line-height:1.5}
+.ar-stage{height:min(70vh,680px);min-height:360px;position:relative;overflow:hidden;padding:0;background:#050609}
+.ar-stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.ar-reticle{position:absolute;left:50%;top:50%;width:35px;height:35px;display:grid;place-items:center;transform:translate(-50%,-50%);border:1px solid #ffffff8a;border-radius:50%;color:#fff;font-size:19px;text-shadow:0 1px 4px #000}
+.ar-aircraft{position:absolute;inset:0;pointer-events:none}
+.ar-label{position:absolute;display:grid;gap:4px;max-width:170px;padding:8px 10px;border:1px solid #ffffff55;border-radius:9px;background:#070a10bb;color:#fff;text-align:left;transform:translate(-50%,-50%);backdrop-filter:blur(8px);pointer-events:auto}
+.ar-label strong{font:600 10px var(--mono)}
+.ar-label span{font-size:9px;color:#ffffffbf}
+.ar-empty{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);max-width:90%;padding:10px 14px;border:1px solid #ffffff30;border-radius:999px;background:#05070baa;color:#fff;text-align:center;font-size:10px}
+.ar-start{margin-top:12px}
+.tools-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.tool-card{display:grid;align-content:start;gap:12px;min-height:0;padding:20px}
+.tool-card h3{margin:0;font:600 18px Manrope,sans-serif}
+.tool-card p{margin:0;color:var(--muted);font-size:10px;line-height:1.65}
+.tool-card select,.tool-card input{width:100%}
+.tool-card .toolbar-button{justify-content:center;width:max-content}
+.tool-result,.airport-time-results,.replay-output{display:grid;gap:9px;color:var(--muted);font-size:10px;line-height:1.6}
+.tool-result>strong{color:var(--accent);font:600 13px var(--mono)}
+.tool-result>small{font-size:9px;color:var(--muted)}
+.airport-time-result{display:grid;gap:4px;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);text-align:left;color:var(--text)}
+.airport-time-result strong{font-size:11px}
+.airport-time-result span,.airport-time-result time{font-size:9px;color:var(--muted)}
+.airport-time-result time{color:var(--accent);font-family:var(--mono)}
+.replay-output{min-height:44px}
+.replay-aircraft-marker{color:#fff;font-size:24px;text-shadow:0 1px 5px #000,0 0 8px var(--accent)}
+.file-picker{display:grid;gap:8px;padding:12px;border:1px dashed var(--line);border-radius:10px}
+.file-picker input{width:100%;color:var(--muted);font-size:10px}
+.strava-match{display:grid;gap:4px;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2)}
+.strava-match strong{color:var(--text);font:600 10px var(--mono)}
+.strava-match span{font-size:9px;color:var(--muted)}
+.theme-amoled .focus-card,.theme-amoled .tool-card,.theme-amoled .aircraft-library-card,.theme-amoled .flight-log-entry{border-color:#1c1e22}
+.theme-amoled .focus-clock{color:#fff}
+.theme-amoled .map-location,.theme-amoled .map-live,.theme-amoled .map-legend{background:#050608e8;border-color:#25272b}
+.theme-amoled .map-action{background:#050608e8;border-color:#2a2c31;color:#f1f2f4}
+.theme-amoled .settings-drawer{background:#050608}
+.theme-amoled .select-row select,.theme-amoled .default-location input{background:#101114;border-color:#292b30;color:#f1f2f4}
+.light-theme .ar-stage{background:#e8ebee}
+@media(max-width:760px){
+  .ar-menu-item:not(.hidden){display:flex!important}
+  .stats-highlights{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .focus-settings{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .focus-settings label:last-of-type{grid-column:1}
+  .flight-log-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:600px){
+  .tools-grid{grid-template-columns:1fr}
+  .flight-log-fields{grid-template-columns:1fr}
+  .flight-log-fields .log-notes{grid-column:auto}
+  .library-tools{align-items:stretch;flex-direction:column}
+  .library-tools input{width:100%}
+  .radio-player-row{grid-template-columns:1fr}
+  .radio-visualizer{width:100%}
+  .focus-card{margin:12px auto}
+  .focus-settings{grid-template-columns:1fr 1fr}
+  .focus-settings button{grid-column:1/-1}
+  .log-periods{overflow-x:auto;flex-wrap:nowrap}
+  .log-periods button{flex:none}
+  .standby-visualizer{inset:21% -5% 28%}
+  .workspace-menu{max-height:min(75vh,540px);overflow:auto}
 }

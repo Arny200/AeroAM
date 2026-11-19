@@ -32,10 +32,12 @@ Render provides the listening port through `PORT`; no fixed port environment var
 - **Weather and daylight:** Open-Meteo current conditions, sunrise, and sunset; airport METAR from AviationWeather.gov through the same-origin service.
 - **Locations:** Browser geolocation, coordinate entry, and Nominatim place search through a rate-limited same-origin proxy.
 - **Radio and music:** Secure Irish radio streams from Radio Browser, Cork's 96FM official player, and the Spotify embed for user-provided track, album, playlist, show, or episode links. The optional Now Playing pill reflects radio playback and Spotify embed playback events.
-- **Space and flight metrics:** Optional ISS position overlay from Where the ISS at; live speed, altitude, airline-prefix, and ADS-B category summaries; approximate aircraft-type-based cruise CO₂ rate on selected flights.
-- **Incidents and quizzes:** Recent aviation headlines from The Aviation Herald, sorted by reported occurrence time by default with severity/type/location sorting; single- or multi-player airport quizzes with custom names, optional timers, and score tracking.
+- **Local tools:** Focus/Pomodoro timer, searchable aircraft reference cards, a locally stored flight log, airport time lookup, carbon comparison estimates, aircraft track replay captured while AeroAM is open, and distance matching for Strava GPX/TCX/JSON/CSV exports.
+- **AR and casting:** Mobile camera-based aircraft direction overlay when camera, location, and motion permissions are available. The folder menu opens a standalone `/cast` standby display that polls the AeroAM server independently of the dashboard tab.
+- **Space and flight metrics:** Live speed, altitude, airline-prefix, aircraft category, country-count and average-flight summaries; approximate aircraft-type-based cruise CO₂ rate on selected flights.
+- **Incidents and quizzes:** Recent aviation headlines from The Aviation Herald, sorted by reported occurrence time by default with severity/type/location sorting; multiplayer airport quizzes with airport difficulty levels, randomized choices, delayed shared-round scoring, and adjustable timers.
 
-Settings, accent colour, quiz preferences, and Traffic Board column visibility/order are stored in browser local storage. The default theme is AMOLED; startup always opens in full-screen Standby Mode. The About page credits Arnold Mathew and notes VS Code, GitHub, and Render.
+Settings, accent colour, visualiser preferences, quiz preferences, flight logs, recently tracked aircraft, and up to 12 hours of sampled aircraft positions are stored in browser local storage. Local aircraft replay is not a historical-feed API; it only covers positions collected on this device while AeroAM is open. The aircraft library is a curated reference set, not a complete airframe registry. The standalone cast display requires the AeroAM Render service to remain online. The default theme is AMOLED; startup always opens in full-screen Standby Mode. The About page credits Arnold Mathew and notes VS Code, GitHub, and Render.
 
 ## Integrations not included
 

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <title>AeroAM Standby</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css">
+  <style>
+    *{box-sizing:border-box}html,body,#map{width:100%;height:100%;margin:0}body{overflow:hidden;background:#000;color:#fff;font-family:Manrope,"Segoe UI",sans-serif}#map{position:absolute;inset:0}.shade{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,#0000 20%,#0005 100%)}.display{position:absolute;inset:0;display:grid;place-content:center;text-align:center;pointer-events:none;text-shadow:0 2px 24px #000}.clock{font-size:clamp(72px,13vw,180px);font-weight:300;letter-spacing:-.07em;font-variant-numeric:tabular-nums}.date{margin-top:8px;font-size:clamp(12px,1.5vw,19px);color:#ffffffc7}.weather{margin-top:24px;font-size:clamp(16px,2vw,24px);color:#ffffffdd}.location{position:absolute;top:24px;left:28px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#fff9}.live{position:absolute;right:26px;top:25px;border:1px solid #ffffff44;border-radius:99px;padding:8px 12px;color:#fff9;font-size:10px;letter-spacing:.1em}.plane{font-size:20px;color:#fff;filter:drop-shadow(0 1px 5px #000)}
+  </style>
+</head>
+<body>
+  <div id="map" aria-label="Live aircraft map"></div><div class="shade"></div>
+  <div class="location" id="location">AeroAM · Live sky</div><div class="live">LIVE TRAFFIC</div>
+  <main class="display"><div><div class="clock" id="clock">--:--</div><div class="date" id="date"></div><div class="weather" id="weather"></div></div></main>
+  <script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script>
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const requestedLat = params.has("lat") ? Number(params.get("lat")) : NaN;
+      const requestedLon = params.has("lon") ? Number(params.get("lon")) : NaN;
+      const lat = Number.isFinite(requestedLat) ? requestedLat : 51.8985;
+      const lon = Number.isFinite(requestedLon) ? requestedLon : -8.4756;
+      const name = params.get("name") || "Cork, Ireland";
+      let timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      document.getElementById("location").textContent = name;
+      const map = new maplibregl.Map({ container:"map",style:"https://tiles.openfreemap.org/styles/dark",center:[lon,lat],zoom:7,attributionControl:true });
+      const markers = new Map();
+      function clock(){const now=new Date();document.getElementById("clock").textContent=new Intl.DateTimeFormat([],{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:timezone}).format(now);document.getElementById("date").textContent=new Intl.DateTimeFormat([],{weekday:"long",month:"long",day:"numeric",timeZone:timezone}).format(now)}
+      async function traffic(){try{const b=map.getBounds(),q=new URLSearchParams({lamin:String(Math.max(-85,b.getSouth())),lomin:String(b.getWest()),lamax:String(Math.min(85,b.getNorth())),lomax:String(b.getEast())});const r=await fetch("/api/aircraft?"+q);if(!r.ok)throw new Error("traffic unavailable");const d=await r.json();const rows=(d.states||[]).filter(s=>s[0]&&Number.isFinite(s[5])&&Number.isFinite(s[6]));const present=new Set(rows.map(s=>s[0]));for(const [id,m]of markers)if(!present.has(id)){m.remove();markers.delete(id)}for(const s of rows){let marker=markers.get(s[0]);if(!marker){const el=document.createElement("span");el.className="plane";el.textContent="✈";marker=new maplibregl.Marker({element:el,rotationAlignment:"map"}).setLngLat([s[5],s[6]]).addTo(map);markers.set(s[0],marker)}marker.setLngLat([s[5],s[6]]);marker.setRotation(Number(s[10])||0)}}catch(error){console.warn("Cast traffic refresh failed.",error)}}
+      async function weather(){try{const q=new URLSearchParams({latitude:String(lat),longitude:String(lon),current:"temperature_2m,weather_code",timezone:"auto"});const r=await fetch("https://api.open-meteo.com/v1/forecast?"+q);if(!r.ok)throw new Error("weather unavailable");const d=await r.json();timezone=d.timezone||timezone;document.getElementById("weather").textContent=`${Math.round(d.current.temperature_2m)}° · ${d.timezone}`;clock()}catch(error){console.warn("Cast weather refresh failed.",error)}}
+      map.on("load",()=>{traffic();setInterval(traffic,30000)});map.on("moveend",traffic);clock();weather();setInterval(clock,1000);setInterval(weather,900000);
+    })();
+  </script>
+</body>
+</html>
